@@ -8,6 +8,8 @@ module module_steady_solver
     public :: compute_residual_norm        ! compute residual norms
     public :: compute_local_time_step_dtau ! compute pseudo time step
     
+    private
+    real(p2), dimension(5,5) :: var_ur_array
 
     !Nonlinear solvers:
 
@@ -19,7 +21,7 @@ contains
     subroutine steady_solve
         use module_common_data    , only : p2, half, one, zero, i_iteration, du, lrelax_sweeps_actual, lrelax_roc
         use module_input_parameter, only : solver_type, accuracy_order, inviscid_flux, CFL, solver_max_itr, solver_tolerance, &
-                                           import_data
+                                           import_data, variable_ur
         use module_ccfv_data_soln , only : set_initial_solution, u, w, res, dtau, u2w, load_data_file, &
                                                 res_norm, res_norm_initial!, gradw, wsn
         use module_ccfv_data_grid , only : cell, ncells!, face
@@ -34,7 +36,11 @@ contains
         integer                       :: i, n_residual_evaluation
         integer                       :: L1 = 1
         
-        
+        var_ur_array = zero
+        do i = 1,5
+            var_ur_array(i,i) = variable_ur(i)
+        end do
+
         i_iteration = 0
         if (import_data) then
             call load_data_file
@@ -157,7 +163,9 @@ contains
             omegan = safety_factor( u(:,i), du(:,i) )
 
             !Update the conservative variables
-            u(:,i) = u(:,i) + omegan*du(:,i)
+
+            u(:,i) = u(:,i) + omegan*matmul(var_ur_array,du(:,i))
+
 
             !Update the primitive variables.
             w(:,i) = u2w( u(:,i) )

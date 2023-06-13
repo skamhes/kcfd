@@ -32,6 +32,8 @@ module module_input_parameter
     character(80)          :: inviscid_jac           = "roe"
     character(80)          :: solver_type            = "rk"
     real(p2), dimension(5) :: eig_limiting_factor    = (/ 0.1, 0.1, 0.1, 0.1, 0.1 /)  !eigenvalue limiting factor
+    real(p2), dimension(5) :: variable_ur            = (/ 1, 1, 1, 1, 1 /)  ! Variable under relaxation factors (only used in 
+    ! implicit) computations
   
   ! Linear relaxation (preconditioner)
     character(80) :: lrelax_scheme       = "gs"    ! preconditioner scheme type
@@ -73,7 +75,8 @@ module module_input_parameter
     perturb_initial      , &
     lrelax_scheme        , &
     lrelax_sweeps        , &
-    lrelax_tolerance
+    lrelax_tolerance     , &
+    variable_ur
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)

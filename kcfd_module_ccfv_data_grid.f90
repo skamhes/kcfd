@@ -654,10 +654,7 @@ contains
         !
         ! ck = bcell, the cell having the boundary face j.
         !
-        ! Note: Boundary data were read from .grid file and stored in a compressed-row
-        !       storage (CRS, bnode(:) with nbnodes(:) ); see module_common_data.m.
-        !       We will use them and construct the custom-data array 'bound', which
-        !       will be used in our CCFV solver.
+
 
         ! Note: in this case the boundary faces are all of the tria and quad 
         write(*,*)

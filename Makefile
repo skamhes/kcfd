@@ -9,8 +9,8 @@
 ##########################################################
 .SUFFIXES : .o .f90
 .f90.o:
-#	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -c $<
-	gfortran -O2 -pg -c $<
+	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -c $<
+#	gfortran -O2 -pg -c $<
 #	gfortran -O3 -c $<
 ##########################################################
 SDIR = .
@@ -38,9 +38,9 @@ OBCTS = $(SDIR)/kcfd_module_input_parameter.o\
 #       don't use it until you're sure bugs are removed.
 ##########################################################
 $(PROGRAM): $(OBCTS)
-#	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -o $@ $(OBCTS)
-	gfortran -O3 -o $@ $(OBCTS)
-#	gfortran -O2 -pg $@ $(OBCTS)
+	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -o $@ $(OBCTS)
+#	gfortran -O2 -pg -o $@ $(OBCTS)
+#	gfortran -O3 -o $@ $(OBCTS)
 ##########################################################
 # Clean up
 ##########################################################
