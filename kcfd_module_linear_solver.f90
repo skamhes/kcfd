@@ -74,7 +74,7 @@ contains
     end subroutine linear_relaxation
 
     recursive subroutine linear_sweeps(ncells,cell,jac,level,correction)
-        use module_common_data,     only : p2, zero, one, lrelax_sweeps_actual, my_eps, half, amg_direction, roc
+        use module_common_data,     only : p2, zero, one, lrelax_sweeps_actual, my_eps, half, amg_direction, roc, two
         use module_ccfv_data_grid,  only : cc_data_type, jacobian_type
         use module_input_parameter, only : solver_type, lrelax_sweeps, lrelax_tolerance, lrelax_scheme, &
                                             use_amg, max_amg_levels
@@ -178,10 +178,13 @@ contains
                 ! Tolerance met: Exit
 
                 if (roc < lrelax_tolerance) then
+                ! if (roc < lrelax_tolerance*two*level) then
+                ! if (roc < min(lrelax_tolerance*(10**(level-1)),two)) then
                     !write(1000,*)
                     !write(1000,*) " Tolerance met. Exit GS relaxation. Total sweeps = ", ii
                     !write(1000,*) " tolerance_linear = ", lrelax_tolerance
                     lrelax_sweeps_actual = ii
+                    ! write(*,*) ii
                     exit relax
                 !-----------------------------------------------------------------
                 ! If tolerance is NOT met.
@@ -237,7 +240,7 @@ contains
             linear_res_norm_prev = linear_res_norm
             
             if (use_amg .and. (level <= max_amg_levels) .and.  & 
-                (ii > 5) .and. (roc/roc_previous > half) .and. (amg_direction == 'up')) then ! will probably play with the convergence condition here some
+                (ii > 10) .and. (roc/roc_previous > half) .and. (amg_direction == 'up')) then ! will probably play with the convergence condition here some
                 call algebraic_multigrid(ncells,cell,correction, jac, level, additive_correction)
                 do i = 1,ncells
                     correction(:,i) = correction(:,i) + additive_correction(:,i)
@@ -267,38 +270,63 @@ contains
                                                                            ! passed to finer level
 
         real(p2), dimension(:,:), allocatable :: g_correction ! restricted correction factor
-        real(p2)                            :: strongest_A11
+        real(p2)                            :: strongest_A11, group_size
         integer, dimension(ncells)          :: assign_group
-        integer                             :: i, k, ngroup, ck, gi, ci, kk, idestat, strongest_k
+        integer                             :: i, k, ngroup, ck, gi, ci, kk, idestat, strongest_k, last_k
         type(cc_data_type),  dimension(:), allocatable :: group_cell
         type(jacobian_type), dimension(:), allocatable :: group
         ! real(p2), dimension(5,5) :: current_diag, current_diag_inv
         ! real(p2),dimension(5,5,4) :: current_off_diag
         ! real(p2), dimension(5) :: current_rhs
-        integer, dimension(100)                        :: temp_nghbr, temp_gnghbr
+        integer, dimension(1000)                        :: temp_nghbr, temp_gnghbr
         ! Initialize var
         assign_group = zero
         correction_del = zero
         ngroup = 0
-        do i = 1,ncells
+        assign_cells : do i = 1,ncells
             if ((assign_group(i) /= 0)) cycle
-            strongest_A11 = zero
-            strongest_k = 0
+            ! strongest_A11 = zero
+            ! strongest_k = 0
+            ngroup = ngroup + 1
+            group_size = 1
+            last_k = 0
+            assign_group(i) = ngroup
             do k = 1,cell(i)%nnghbrs
-                if ((abs(jac(i)%off_diag(1,1,k)) > abs(strongest_A11)) .and. (assign_group(cell(i)%nghbr(k)) == 0)) then
-                    strongest_A11 =  jac(i)%off_diag(1,1,k)
-                    strongest_k = k
+                ! if ((abs(jac(i)%off_diag(1,1,k)) > abs(strongest_A11)) .and. (assign_group(cell(i)%nghbr(k)) == 0)) then
+                !     strongest_A11 =  jac(i)%off_diag(1,1,k)
+                !     strongest_k = k
+                ! end if
+                if (assign_group(cell(i)%nghbr(k)) == 0) then
+                    assign_group(cell(i)%nghbr(k)) = ngroup
+                    group_size = group_size + 1
+                    last_k = k
                 end if
+                if (group_size >= 4) cycle assign_cells
             end do
-            if (strongest_k == 0) then
-                ngroup = ngroup + 1
-                assign_group(i) = ngroup ! group of 1
-            else 
-                ngroup = ngroup + 1
-                assign_group(i) = ngroup
-                assign_group(cell(i)%nghbr(strongest_k)) = ngroup
+            if ( last_k == 0 .and. cell(i)%nnghbrs /= 0) then ! all neighbors are in a group
+                assign_group(i) = assign_group(cell(i)%nghbr(1)) ! just add it to the neighbor of group 1 (theoretically this 
+                ! could result in groups as large as 6 but this is unlikely and the cut off of 4 is somewhat arbitrary)
+                ngroup = ngroup - 1 ! remove the group
+                cycle assign_cells
             end if
-        end do
+            ! we only make it here if group_size < 4
+            ! so we're just gonna keep adding cells till we get to 4
+            do kk = 1,cell(cell(i)%nghbr(last_k))%nnghbrs
+                if (assign_group(cell(cell(i)%nghbr(last_k))%nghbr(kk)) == 0) then
+                    assign_group(cell(cell(i)%nghbr(last_k))%nghbr(kk)) = ngroup
+                    group_size = group_size + 1
+                end if
+                if (group_size >= 4) cycle assign_cells
+            end do
+            ! if (strongest_k == 0) then
+            !     ngroup = ngroup + 1
+            !     assign_group(i) = ngroup ! group of 1
+            ! else 
+            !     ngroup = ngroup + 1
+            !     assign_group(i) = ngroup
+            !     assign_group(cell(i)%nghbr(strongest_k)) = ngroup
+            ! end if
+        end do assign_cells
         ! Allocate group arrays
         allocate(group(ngroup))
         allocate(group_cell(ngroup))
@@ -317,14 +345,22 @@ contains
         end do
         do i = 1,ncells
             gi = assign_group(i)
-            if (group_cell(gi)%vtx(1) == 0) then
-                group_cell(gi)%vtx(1) = i
-            else 
-                ! if (gi == 182 .and. level == 3) then
-                !     write(*,*) gi, level
-                ! end if
-                group_cell(gi)%vtx(2) = i ! max group size is 2 so this is fine (for now)
-            end if
+            k = 1
+            add_vtx : do
+                if (group_cell(gi)%vtx(k) == 0) then
+                    group_cell(gi)%vtx(k) = i    
+                    exit add_vtx
+                end if
+                k = k + 1
+            end do add_vtx
+            ! if (group_cell(gi)%vtx(1) == 0) then
+            !     group_cell(gi)%vtx(1) = i
+            ! else 
+            !     ! if (gi == 182 .and. level == 3) then
+            !     !     write(*,*) gi, level
+            !     ! end if
+            !     group_cell(gi)%vtx(2) = i ! max group size is 2 so this is fine (for now) not anymore
+            ! end if
         end do
         do gi = 1,ngroup
             group_cell(gi)%nnghbrs = 0
@@ -338,8 +374,7 @@ contains
                         group_cell(gi)%nnghbrs = group_cell(gi)%nnghbrs + 1
                         temp_nghbr(group_cell(gi)%nnghbrs) = cell(ck)%nghbr(kk)
                         if (any(temp_nghbr /= cell(ck)%nghbr(kk))) then
-                            
-                            group_cell(gi)%cnnghbrs = group_cell(gi)%cnnghbrs + 1 ! don't think this is necessary
+                            group_cell(gi)%cnnghbrs = group_cell(gi)%cnnghbrs + 1
                             temp_gnghbr(group_cell(gi)%cnnghbrs) = assign_group(cell(ck)%nghbr(kk))
                         end if
                     end if
@@ -349,39 +384,34 @@ contains
             allocate(group_cell(gi)%cnghbr(group_cell(gi)%cnnghbrs))
             group_cell(gi)%nghbr  = temp_gnghbr( 1:group_cell(gi)%nnghbrs )
             group_cell(gi)%cnghbr = temp_nghbr(1:group_cell(gi)%cnnghbrs)
-        end do
-
-        ! Initialize group matrix
-        do gi = 1,ngroup
+        
+            ! Initialize group matrix
             group(gi)%diag = zero
             allocate(group(gi)%off_diag(5,5,group_cell(gi)%nnghbrs))
             group(gi)%off_diag = zero
             group(gi)%rhs = zero
-        end do
+        ! end do
 
         ! Add terms to restricted matrix (group)
-        do i = 1,ncells
-            gi = assign_group(i)
-            group(gi)%diag = group(gi)%diag + jac(i)%diag
-            group(gi)%RHS  = group(gi)%RHS  - matmul(jac(i)%diag,phi(:,i)) + jac(i)%RHS
-            do k = 1,cell(i)%nnghbrs
-                if (assign_group(cell(i)%nghbr(k)) == gi) then
-                    group(gi)%diag = group(gi)%diag + jac(i)%off_diag(:,:,k)
-                end if
-                group(gi)%RHS = group(gi)%RHS - matmul(jac(i)%off_diag(:,:,k),phi(:,i))
-            end do
-            ! current_diag = group(gi)%diag
-            ! current_rhs =  group(gi)%RHS
-        end do
+        ! do i = 1,ncells
+        !     gi = assign_group(i)
+        !     ! group(gi)%diag = group(gi)%diag + jac(i)%diag
+        !     ! group(gi)%RHS  = group(gi)%RHS  - matmul(jac(i)%diag,phi(:,i)) + jac(i)%RHS
+        !     do k = 1,cell(i)%nnghbrs
+        !         ! if (assign_group(cell(i)%nghbr(k)) == gi) then
+        !         !     group(gi)%diag = group(gi)%diag + jac(i)%off_diag(:,:,k)
+        !         ! end if
+        !         ! group(gi)%RHS = group(gi)%RHS - matmul(jac(i)%off_diag(:,:,k),phi(:,i))
+        !     end do
+        ! end do
         ! Loop through the groups to add one more term
-        do gi = 1,ngroup
+        ! do gi = 1,ngroup
             ! current_off_diag = zero
             i = 0
-            ! if (gi == 188) then 
-            !     write (*,*) gi
-            ! end if
             do k = 1,group_cell(gi)%nvtx
                 ck = group_cell(gi)%vtx(k)
+                group(gi)%diag = group(gi)%diag + jac(ck)%diag
+                group(gi)%RHS  = group(gi)%RHS  - matmul(jac(ck)%diag,phi(:,ck)) + jac(ck)%RHS
                 do kk = 1,cell(ck)%nnghbrs
                     if (.not.(assign_group(cell(ck)%nghbr(kk)) == gi)) then
                         i = i + 1
@@ -389,6 +419,10 @@ contains
                         group(gi)%off_diag(:,:,i) = group(gi)%off_diag(:,:,i) + jac(ck)%off_diag(:,:,kk)
                         ! current_off_diag(:,:,i) = group(gi)%off_diag(:,:,i) 
                     end if
+                    if (assign_group(cell(ck)%nghbr(kk)) == gi) then
+                        group(gi)%diag = group(gi)%diag + jac(ck)%off_diag(:,:,kk)
+                    end if
+                    group(gi)%RHS = group(gi)%RHS - matmul(jac(ck)%off_diag(:,:,kk),phi(:,ck))
                 end do
             end do
             call gewp_solve( group(gi)%diag(:,:), 5  , group(gi)%diag_inv, idestat    )
