@@ -36,6 +36,8 @@ module module_ccfv_data_grid
         integer, dimension(:),  pointer ::      nghbr ! list of face neighbors
         integer, dimension(:,:),pointer ::    commonv ! list of vertices shared with nghbr
         integer, dimension(:),  pointer ::   ncommonv ! number of common vertices with neighbor
+        integer                         ::   cnnghbrs ! number of neighbor groups (only used during AMG)
+        integer, dimension(:),  pointer ::     cnghbr ! list of neighbor groups (only used during AMG)
     end type cc_data_type
 
     ! Cell data array in the custom data type.
@@ -88,10 +90,11 @@ module module_ccfv_data_grid
         real(p2), dimension(5,5)                :: diag     ! diagonal blocks of Jacobian matrix
         real(p2), dimension(:,:,:), allocatable :: off_diag ! off-diagonal blocks
         real(p2), dimension(5,5)                :: diag_inv ! inverse of diagonal blocks
+        real(p2), dimension(5)                  :: RHS      ! Right hand side (b) of the linear system
     end type jacobian_type
 
     type(jacobian_type), dimension(:), allocatable :: jac ! jacobian array
-
+    type(jacobian_type), dimension(16)             :: test ! jacobian array
     !------------------------------------------------------------------------------------
     ! End of the data used to implement a cell-centered FV method.
     !------------------------------------------------------------------------------------
@@ -1254,6 +1257,26 @@ contains
         ! overflow (x*y >= 0 could have issues for large x and y)
         ! note: treats 0 as positive
     end function samesides
+
+    ! subroutine destroy_cells(ncells_to_be_destroyed,cell_to_be_destroyed)
+    !     ! A quick subroutine to deallocate the components of a cell type that is no longer needed
+    !     implicit none
+    !     integer, intent(in) :: ncells_to_be_destroyed
+    !     type(cc_data_type), intent(inout) :: cell_to_be_destroyed
+    !     integer :: i
+
+    !     do i = 1,ncells
+    !         if (allocated(cell_to_be_destroyed(i)%commonv)) deallocate(cell_to_be_destroyed(i)%commonv)
+    !         if (allocated(cell_to_be_destroyed(i)%vtx)) deallocate(cell_to_be_destroyed(i)%vtx)
+    !         if (allocated(cell_to_be_destroyed(i)%nghbr)) deallocate(cell_to_be_destroyed(i)%nghbr)
+    !         if (allocated(cell_to_be_destroyed(i)%ncommonv)) deallocate(cell_to_be_destroyed(i)%ncommonv)
+    !         if (allocated(cell_to_be_destroyed(i)%gnghbr)) deallocate(cell_to_be_destroyed(i)%gnghbr)
+            
+            
+
+    !     end do
+    !     deallocate(cell_to_be_destroyed)
+    ! end subroutine destroy_cells
 end module module_ccfv_data_grid
 
 

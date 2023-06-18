@@ -83,6 +83,8 @@ module module_common_data
     real(p2)                          :: lrelax_roc
     integer                           :: i_iteration
     real(p2), dimension(:,:), allocatable :: du
+    character(2)                      :: amg_direction         ! Output of U array
+    real(p2) :: roc
     !Note: These variables are available within the entire module, and within
     !      so all subroutines contained below.
     !--------------------------------------------------------------------

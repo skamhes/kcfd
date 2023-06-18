@@ -147,8 +147,8 @@ contains
         w_initial(iw) =   w_inf
         w_initial(ip) =   p_inf
         if (perturb_initial) then
-            w_initial(iu) = 0.4
-            w_initial(iv)= 0.1
+            w_initial(iu) = 0.6
+            w_initial(iv)= 0.6
             !w_inf = 0.2
         end if                
         !Set initial solution by the free stream values

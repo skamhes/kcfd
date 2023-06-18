@@ -23,7 +23,7 @@ contains
         real(p2) :: phi_vertex, phi_vertex_min, limiter_beps
         real(p2) :: phi_var_min
 
-        allocate(phi(ncells))
+        !allocate(phi(ncells)) ! possible memory leak? Moved allocation to steady solve subroutine (only called once)
         limiter_beps = 1.0e-14_p2
         !loop over cells
         cell_loop : do i = 1,ncells

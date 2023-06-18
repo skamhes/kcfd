@@ -39,12 +39,14 @@ module module_input_parameter
     character(80) :: lrelax_scheme       = "gs"    ! preconditioner scheme type
     integer       :: lrelax_sweeps       = 500     ! preconditioner max relaxation
     real(p2)      :: lrelax_tolerance    = 0.1_p2  ! preconditioner tolerance (reduction)
+    integer       :: max_amg_levels       = 5
   
     integer                :: accuracy_order = 1
     logical                ::  use_limiter = .false.
     logical                :: write_data = .false.
     logical                :: import_data = .false.
     logical                :: perturb_initial = .false.
+    logical                :: use_amg = .true. ! use algebraic multigrid to accelerate convergence of linear implicit solver
   
   ! End of Default input values
   !-------------------------------------------------------------------------
@@ -76,7 +78,9 @@ module module_input_parameter
     lrelax_scheme        , &
     lrelax_sweeps        , &
     lrelax_tolerance     , &
-    variable_ur
+    variable_ur          , &
+    use_amg              , &
+    max_amg_levels        
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)

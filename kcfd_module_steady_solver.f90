@@ -21,12 +21,13 @@ contains
     subroutine steady_solve
         use module_common_data    , only : p2, half, one, zero, i_iteration, du, lrelax_sweeps_actual, lrelax_roc
         use module_input_parameter, only : solver_type, accuracy_order, inviscid_flux, CFL, solver_max_itr, solver_tolerance, &
-                                           import_data, variable_ur
+                                           import_data, variable_ur, use_limiter
         use module_ccfv_data_soln , only : set_initial_solution, u, w, res, dtau, u2w, load_data_file, &
                                                 res_norm, res_norm_initial!, gradw, wsn
         use module_ccfv_data_grid , only : cell, ncells!, face
         use module_ccfv_gradient  , only : construct_vertex_stencil, compute_lsq_coefficients
         use module_ccfv_residual  , only : compute_residual
+        use module_ccfv_limiter   , only : phi
         implicit none
 
         !integer                       :: i_iteration = 0
@@ -73,7 +74,9 @@ contains
         lrelax_sweeps_actual = 0
         lrelax_roc = 0.0_p2
         n_residual_evaluation = 0
-
+        if (use_limiter) then
+            allocate(phi(ncells))
+        end if
 
         solver_loop : do while (i_iteration <= solver_max_itr)
             call compute_residual
