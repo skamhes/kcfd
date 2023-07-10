@@ -128,10 +128,10 @@
     !-------------------------------------------------------------------------------
     ! Read the input parameters
 
-    !call read_nml_input_parameters("input.nml")
-    ! call read_nml_input_parameters("airfoil_input.nml")
-    !call read_nml_input_parameters("input_om6.nml")
-    call read_nml_input_parameters("input_bump.nml")
+    ! call read_nml_input_parameters("input.nml")
+    call read_nml_input_parameters("airfoil_input.nml")
+    ! call read_nml_input_parameters("input_om6.nml")
+    ! call read_nml_input_parameters("input_bump.nml")
     !-------------------------------------------------------------------------------
     ! Set file names.
 

@@ -1,7 +1,13 @@
 ##########################################################
-# Makefile for EDU2D-CCFV-Euler-EXPLCT
+# Makefile for KCFD
 ##########################################################
  PROGRAM = kcfd
+##########################################################
+# Default path for Fortran Standard Library
+# Installation instructions:
+# https://github.com/fortran-lang/stdlib#getting-started
+##########################################################
+# LD_LIBRARY_PATH="/usr/local/include/fortran_stdlib/GNU-9.4.0/" -I$(LD_LIBRARY_PATH)
 ##########################################################
 # Suffix Rule for f90
 # Note: use "gfortran -O2" for best performance, but
@@ -9,9 +15,11 @@
 ##########################################################
 .SUFFIXES : .o .f90
 .f90.o:
-#	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -c $<
+
+	
+	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -c $<
 #	gfortran -O2 -pg -c $<
-	gfortran -O3 -c $<
+#	gfortran -O3 -c $<
 ##########################################################
 SDIR = .
 
@@ -21,6 +29,7 @@ OBCTS = $(SDIR)/kcfd_module_input_parameter.o\
 	$(SDIR)/kcfd_module_ccfv_data_soln.o\
 	$(SDIR)/kcfd_module_ccfv_gradient.o\
 	$(SDIR)/kcfd_module_write_files.o\
+	$(SDIR)/kcfd_module_sparse_matrix.o\
 	$(SDIR)/kcfd_module_flux.o\
 	$(SDIR)/kcfd_derivative_data_df5.o\
 	$(SDIR)/kcfd_flux_functions_ddt.o\
@@ -38,9 +47,9 @@ OBCTS = $(SDIR)/kcfd_module_input_parameter.o\
 #       don't use it until you're sure bugs are removed.
 ##########################################################
 $(PROGRAM): $(OBCTS)
-#	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -o $@ $(OBCTS)
+	gfortran -O0 -g -fimplicit-none  -Wall  -Wline-truncation  -Wcharacter-truncation  -Wsurprising  -Waliasing  -Wimplicit-interface  -Wunused-parameter  -fwhole-file  -fcheck=all  -std=f2008  -pedantic  -fbacktrace -fall-intrinsics -o $@ $(OBCTS)
 #	gfortran -O2 -pg -o $@ $(OBCTS)
-	gfortran -O3 -o $@ $(OBCTS)
+#	gfortran -O3 -o $@ $(OBCTS)
 ##########################################################
 # Clean up
 ##########################################################
