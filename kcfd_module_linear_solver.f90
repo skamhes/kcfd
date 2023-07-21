@@ -94,7 +94,7 @@ contains
         ! Subroutine to perform the smoothing of the linear system using Gauss-Seidel iteration.  Currently there's a bunch of
         ! commented out code which I'm leaving as reference.  Once I have things definetly working I'll clean things up a little.
 
-        use module_common_data,     only : p2, zero, one, lrelax_sweeps_actual, my_eps, half, amg_direction, roc, two
+        use module_common_data,     only : p2, zero, one, lrelax_sweeps_actual, my_eps, half, amg_direction, roc, two, fourth
         use module_ccfv_data_grid,  only : cc_data_type, jacobian_type
         use module_input_parameter, only : solver_type, lrelax_sweeps, lrelax_tolerance, lrelax_scheme, &
                                             use_amg, max_amg_levels
@@ -275,7 +275,7 @@ contains
             linear_res_norm_prev = linear_res_norm
             
             if (use_amg .and. (level <= max_amg_levels) .and.  & 
-                (ii > 10) .and. (roc/roc_previous > half) .and. (amg_direction == 'up')) then 
+                (ii > 5) .and. (roc/roc_previous > half) .and. (amg_direction == 'up')) then 
                     ! will probably play with the convergence condition here some
                 call algebraic_multigrid(ncells,correction, V, C, R, nnz, res, level, additive_correction)
                 ! call algebraic_multigrid(ncells,cell,correction, V, C, R, nnz, res, level, additive_correction)
@@ -501,7 +501,7 @@ contains
         real(p2), dimension(3)              :: A11_nghbrs
         integer,  dimension(3)              :: strongest_3nghbr, sort_index
         integer, dimension(ncells)          :: assign_group
-        integer                             :: i, j, k, ck, gi, kk, os
+        integer                             :: i, j, k, ck, gi, kk, os, ii, nz_count
         integer                             :: ngroup
         integer                             :: idestat, strongest_k, last_k
         type(cc_data_type),  dimension(:), allocatable :: group_cell
@@ -509,28 +509,34 @@ contains
 
         real(p2), dimension(5,ncells)       :: defect ! defect used in RHS for AMG
         real(p2), dimension(:,:), allocatable :: defect_res ! R(A*phi + b)
+        real(p2), dimension(:,:), allocatable :: defect_resOLD ! R(A*phi + b)
 
         integer, dimension(1000) :: temp_nghbr, temp_gnghbr
 
         ! Restricted Vars
         integer, dimension(:,:), allocatable    :: Restrict
+        integer, dimension(ncells)              :: RestrictC, ProlongC
+        integer, dimension(ncells + 1)          :: RestrictR, ProlongR
         real(p2), dimension(:,:,:), allocatable :: RAP_V
         integer, dimension(:), allocatable      :: RAP_C
         integer, dimension(:), allocatable      :: RAP_R
         real(p2), dimension(:,:,:), allocatable :: RAP_Dinv
 
         ! Debugging Vars
-        real(p2), dimension(5,ncells) :: correction_old
-
-
+        ! real(p2), dimension(5,ncells) :: correction_old
+        real :: time, sum
+        real, dimension(2) :: values
+        sum = zero
         ! real(p2), dimension(5,5) :: current_diag, current_diag_inv
         ! real(p2),dimension(5,5,4) :: current_off_diag
         ! real(p2), dimension(5) :: current_rhs
-       
+        ! call dtime(values,time)
         ! Initialize var
         assign_group = zero
         correction_del = zero
         ngroup = 0
+        RestrictR(1) = 1
+        ProlongR = (/ (i, i = 1,(ncells+1)) /)
         assign_cells : do i = 1,ncells
             if ((assign_group(i) /= 0)) cycle
             ! Initialize
@@ -541,6 +547,9 @@ contains
             strongest_3nghbr = 0
             assign_group(i) = ngroup
             do j = R(i),(R(i+1)-1)
+                if (C(j) == 0) then
+                    write(*,*) j
+                end if
                 if (C(j) == i .or. assign_group(C(j)) /= 0) cycle ! skip diagonal and already assigned
                 current_n = ABS(V(1,1,j))
                 if (current_n > A11_nghbrs(1)) then
@@ -552,9 +561,13 @@ contains
                 end if
             end do
             if ( all(strongest_3nghbr(:) == 0)) then ! all neighbors are in a group
-                assign_group(i) = assign_group(C(R(i))) ! just add it to the neighbor of group 1 (theoretically this 
-                ! could result in groups as large as 6 but this is unlikely and the cut off of 4 is somewhat arbitrary)
-                ngroup = ngroup - 1 ! remove the group
+                ! assign_group(i) = assign_group(C(R(i))) ! just add it to the neighbor of group 1 (theoretically this 
+                ! ! could result in groups as large as 6 but this is unlikely and the cut off of 4 is somewhat arbitrary)
+                ! ngroup = ngroup - 1 ! remove the group
+                ! Were just making a group of 1.  Works better with the CSRM matrix format
+                ProlongC(i) = ngroup
+                RestrictR(ngroup + 1)        = RestrictR(ngroup) + 1 
+                RestrictC(RestrictR(ngroup)) = i
                 cycle assign_cells
             end if
             ! we only make it here if group_size < 4
@@ -564,10 +577,21 @@ contains
                     assign_group(strongest_3nghbr(j)) = ngroup
                 end if
             end do
-            if ( all(strongest_3nghbr(:) /= 0) ) cycle ! if all 3 neighbors have been assigned we don't need to look for more
+            if ( all(strongest_3nghbr(:) /= 0) ) then
+                ProlongC(i) = ngroup
+                do j = 1,3
+                    ProlongC(strongest_3nghbr(j)) = ngroup
+                end do
+                RestrictR(ngroup + 1) = RestrictR(ngroup) + 4
+                RestrictC(RestrictR(ngroup):(RestrictR(ngroup+1)-1)) = insertion_sort_int((/i,strongest_3nghbr/),4)
+                cycle ! if all 3 neighbors have been assigned we don't need to look for more
             ! only get here if they haven't been
+            end if
             nghbr_group_add : do j = R(strongest_3nghbr(3)) , (R(strongest_3nghbr(3) + 1) - 1) 
                 ! move to row of strongest neighbor
+                if (C(j) == 0) then
+                    write(*,*) j
+                end if
                 if ( assign_group(C(j)) /= 0 .or. j == C(R(i)) ) cycle ! allready assigned or diagonal
                 current_n = ABS(V(1,1,j))
                 if (current_n > A11_nghbrs(1)) then
@@ -581,19 +605,47 @@ contains
                 ! were done.
             end do nghbr_group_add 
             ! add any missing terms
+            nz_count = 0
             do j = 1,3
                 if ( strongest_3nghbr(j) /= 0 ) then
                     assign_group(strongest_3nghbr(j)) = ngroup
+                    ProlongC(strongest_3nghbr(j)) = ngroup
+                    nz_count = nz_count + 1
                 end if
             end do
+            ProlongC(i) = ngroup
+            RestrictR(ngroup + 1) = RestrictR(ngroup) + nz_count + 1
+            if (nz_count > 0) then
+                RestrictC(RestrictR(ngroup):(RestrictR(ngroup+1)-1)) = &
+                    insertion_sort_int((/i,strongest_3nghbr((4-nz_count):)/),nz_count + 1)
+            else
+                RestrictC(RestrictR(ngroup)) = i ! I don't think it's possible to get this far with nz_count = 0 but I'm leaving
+                ! this here just in case...
+            end if
         end do assign_cells
 
-        ! Build restriction matrix
-        allocate(Restrict(ngroup,ncells))
-        call create_restriction_matrix(ncells,ngroup,assign_group,Restrict)
+        ! call dtime(values,time)
+        ! sum = sum + time
+        ! write(*,*) "Build Group: ",time," seconds "
+        ! call dtime(values,time)
 
+        ! Build restriction matrix
+        ! allocate(Restrict(ngroup,ncells))
+        ! call create_restriction_matrix(ncells,ngroup,assign_group,Restrict)
+        
+        ! call dtime(values,time)
+        ! sum = sum + time
+        ! write(*,*) "Build Restriction Matrix: ",time," seconds "
+        ! call dtime(values,time)
+        
         allocate(RAP_R(ngroup + 1))
-        call R_A_P(ncells,ngroup,nnz,Restrict,V,C,R,RAP_V,RAP_C,RAP_R)
+        call R_A_P(ncells,ngroup,nnz,RestrictC,RestrictR,ProlongC,ProlongR,V,C,R,RAP_V,RAP_C,RAP_R,os)
+        
+        ! call dtime(values,time)
+        ! sum = sum + time
+        ! write(*,*) "Build RAP: ",time," seconds "
+        ! call dtime(values,time)
+        
         allocate(RAP_Dinv(5,5,ngroup))
         
         do gi = 1,ngroup
@@ -603,30 +655,47 @@ contains
                 end if
             end do
         end do
-
+        ! call dtime(values,time)
+        ! sum = sum + time
+        ! write(*,*) "Build D_inv: ",time," seconds "
+        ! call dtime(values,time)
         call compute_defect(ncells,V,C,R,phi,res,defect)
         allocate(defect_res(5,ngroup))
-        do i = 1,5
-            defect_res(i,:) = matmul(Restrict(:,:),defect(i,:))
+        ! allocate(defect_resOLD(5,ngroup))
+        defect_res = zero
+        do i = 1,ngroup
+            do j = RestrictR(i),(RestrictR(i+1)-1)
+                defect_res(:,i) = defect_res(:,i) + defect(:,RestrictC(j))
+            end do
         end do
-
+        ! do i = 1,5
+        !     defect_resOLD(i,:) = matmul(Restrict(:,:),defect(i,:))
+        ! end do
+        ! call dtime(values,time)
+        ! sum = sum + time
+        ! write(*,*) "Compute Defect: ",time," seconds "
+        ! write(*,*) "Total Time: ",sum," seconds "
+        ! call dtime(values,time)
         ! Call the linear solver to relax the newly coarsened system.
         allocate(g_correction(5,ngroup))
         
         call linear_sweeps(ngroup, RAP_V,RAP_C,RAP_R,nnz,defect_res,RAP_Dinv, level + 1, g_correction)
 
-        do i = 1,5
-            ! Piecewise injection means the correction gets added to all members of the group without modification
-            ! del_phi           =                  P (=R^T) * del      
-            correction_del(i,:) = matmul(transpose(Restrict),g_correction(i,:))
+        do i = 1,ncells
+            ! Since ProlongC has 1 value per row we can skip the inner j loop.
+            correction_del(:,i) = g_correction(:,ProlongC(i))
         end do
+        ! do i = 1,5
+        !     ! Piecewise injection means the correction gets added to all members of the group without modification
+        !     ! del_phi           =                  P (=R^T) * del      
+        !     correction_del(i,:) = matmul(transpose(Restrict),g_correction(i,:))
+        ! end do
         ! deallocate(group)
         if (allocated(group_cell))   deallocate(group_cell)
         if (allocated(RAP_V))        deallocate(     RAP_V)
         if (allocated(RAP_C))        deallocate(     RAP_C)
         if (allocated(RAP_R))        deallocate(     RAP_R)
         if (allocated(RAP_Dinv))     deallocate(  RAP_Dinv)
-        if (allocated(Restrict))     deallocate(  Restrict)
         if (allocated(defect_res))   deallocate(defect_res)
         if (allocated(g_correction)) deallocate(g_correction)
         ! Deallocate
@@ -751,6 +820,31 @@ contains
         end do
         
     end subroutine LU_extraction
+
+    function insertion_sort_int(x,length)
+        implicit none
+        integer, intent(in)                    :: length
+        integer, dimension(length), intent(in) :: x
+        integer, dimension(length)             :: insertion_sort_int
+
+        integer :: i,j,x_j
+        insertion_sort_int = x
+
+        do i = 1,length
+            j = i
+            inner : do
+                if ( (j <= 1) ) then
+                    exit inner
+                else if (insertion_sort_int(j-1) < insertion_sort_int(j)) then
+                    exit inner
+                end if
+                x_j = insertion_sort_int(j)
+                insertion_sort_int(j) = insertion_sort_int(j-1)
+                insertion_sort_int(j-1) = x_j
+                j = j-1
+            end do inner
+        end do
+    end function
 
     subroutine insertion_sort_real(x,index)
         use module_common_data , only : p2

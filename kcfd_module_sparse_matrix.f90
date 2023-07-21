@@ -55,7 +55,9 @@ contains
         end do
     end subroutine build_A_BCSM
 
-    subroutine A_times_P(ncells,ngroups,nnz,V,C,R,Restrict,productV,productC,productR)
+    subroutine A_times_P(ncells,ngroups,nnz,V,C,R,ProlongC,ProlongR,productV,productC,productR)
+    ! subroutine A_times_P(ncells,ngroups,nnz,V,C,R,ProlongC,ProlongR,productV,productC,productR,Restrict, productVOLD,productCOLD,&
+    !     productROLD)
         use module_common_data, only : p2, zero
         ! This subroutine performes the first half (AP) of RAP (where P = R^T).  In preparation for multiplication by R
         ! the resulting matrix is stored in Block Compressed Sparse COLUMN (BCSC) form.  This allows for full columns to be easily 
@@ -69,104 +71,130 @@ contains
         real(p2), dimension(5,5,nnz), intent(in) :: V
         integer, dimension(nnz), intent(in) :: C
         integer, dimension(ncells+1), intent(in) :: R
-        integer, dimension(ngroups,ncells), intent(in) :: Restrict
+        integer, dimension(ncells), intent(in) :: ProlongC
+        integer, dimension(ncells + 1), intent(in) :: ProlongR
+        ! integer, dimension(ngroups,ncells), intent(in) :: Restrict
 
         real(p2), dimension(:,:,:), allocatable, intent(out) :: productV
-        integer, dimension(:), allocatable, INTENT(OUT) :: productR
-        integer, dimension(ngroups+1), INTENT(OUT) :: productC
+        integer, dimension(:), allocatable, INTENT(OUT) :: productC
+        integer, dimension(ncells + 1), INTENT(OUT) :: productR
 
-        integer :: nnz_prime, i, j, k, os
+
+        ! real(p2), dimension(:,:,:), allocatable, INTENT(OUT) :: productVOLD
+        ! integer, dimension(:), allocatable, INTENT(OUT) :: productROLD
+        ! integer, dimension(ngroups + 1), INTENT(OUT) :: productCOLD
+
+        integer :: nnz_prime, i, j, k, os, counter, nnz_prime_new
         logical :: added
         real(p2), dimension(5,5) :: intermediateProduct
-        character(len=80) :: filenameV, filenameC, filenameR
-        filenameV = "A_V.dat"
-        filenameC = "A_C.dat"
-        filenameR = "A_R.dat"
+  
+        real :: time
+        real, dimension(2) :: values
 
-        nnz_prime = 0
-        ! count the number of nonzero entries in the product
-        do k = 1,ngroups
-            row_mid : do i = 1,ncells
-                do j = R(i),(R(i+1)-1)
-                    ! see if any of the values from column k of P match to any of the values of row i of A.  Since it's any not
-                    ! all, this is essentially an OR gate.  Which means once we find one we can cycle the row.
-                    if (Restrict(k,C(j)) == 1) then ! Restrict (j,i) = P(i,j)
-                        nnz_prime = nnz_prime + 1
-                        cycle row_mid
-                    end if
-                end do
-            end do row_mid
-        end do
+        ! logical, dimension(ncells) :: ProlongV
+        ! integer, dimension(ncells) :: ProlongC
+        ! integer, dimension(ncells + 1) :: ProlongR
 
-        allocate(productV(5,5,nnz_prime))
-        allocate(productR(    nnz_prime))
-        
-        ! **************************************************************
-        ! BEGIN DEBUG CODE
-        ! **************************************************************
-        ! open(unit=8, file=filenameV, status="replace", iostat=os)   
-        ! do i = 1,nnz
-        !     do k = 1,5
-        !         write(8,*) V(k,:,i)
+        ! real(p2), dimension(:,:,:), allocatable:: prodrowV
+        ! integer, dimension(:), allocatable :: prodrowC
+        ! integer, dimension(ngroups+1) :: prodrowR
+
+        ! OLD
+        ! call dtime(values,time)
+        ! nnz_prime = 0
+        ! ! count the number of nonzero entries in the product
+        ! do k = 1,ngroups
+        !     row_mid : do i = 1,ncells
+        !         do j = R(i),(R(i+1)-1)
+        !             ! see if any of the values from column k of P match to any of the values of row i of A.  Since it's any not
+        !             ! all, this is essentially an OR gate.  Which means once we find one we can cycle the row.
+        !             if (Restrict(k,C(j)) == 1) then ! Restrict (j,i) = P(i,j)
+        !                 nnz_prime = nnz_prime + 1
+        !                 cycle row_mid
+        !             end if
+        !         end do
+        !     end do row_mid
+        ! end do
+
+        ! call dtime(values,time)
+        ! write(*,*) "NNZ_Prime Count Old:", time
+
+        ! TESTING ONLY
+        ! call dtime(values,time)
+        ! ! Build Prolongation matrix in CSRM form:
+        ! ProlongR(1) = 1
+        ! counter = 1
+        ! do i = 1,ncells
+        !     do j = 1,ngroups
+        !         if (Restrict(j,i) == 1) then
+        !            !ProlongV(counter) = .true. ! pretty sure don't I actually need this vector but that's for later....
+        !             ProlongC(counter) = j
+        !             counter = counter + 1
+        !         end if
         !     end do
+        !     ProlongR(i+1) = counter
         ! end do
-        ! close(8)
 
-        ! open(unit=8, file=filenameC, status="replace", iostat=os)   
-        ! do i = 1,nnz
-        !         write(8,*) C(i)
+        ! call dtime(values,time)
+        ! write(*,*) "Build P from R(dense):", time
+
+        ! OLD
+        ! call dtime(values,time)
+        ! allocate(productVOLD(5,5,nnz_prime))
+        ! allocate(productROLD(    nnz_prime))
+
+        ! nnz_prime = 1 ! re-init
+        ! productCOLD(1) = nnz_prime
+        ! productVOLD = zero
+
+        ! do k = 1,ngroups
+        !     do i = 1,ncells
+        !         added = .false.
+        !         do j = R(i),(R(i+1)-1)
+        !             ! V(:,:,j) is nonzero by definition
+        !             ! intermediateProduct = V(:,:,j) * Restrict(k,C(j))
+
+        !             if ( Restrict(k,C(j)) == 1 ) then
+        !                 productVOLD(:,:,nnz_prime) = productVOLD(:,:,nnz_prime) + V(:,:,j)
+        !                 productROLD(nnz_prime) = i
+        !                 added = .true.
+        !             end if
+        !         end do
+        !         ! if (any(productV(:,:,nnz_prime) /= zero)) then
+        !         !     write(*,*) productV(1,1,nnz_prime)
+        !         ! end if
+        !         if (added) nnz_prime = nnz_prime + 1
+        !     end do
+        !     productCOLD(k+1) = nnz_prime
         ! end do
-        ! close(8)
+        ! ! Note: nnz_prime is now one higher than it should be.  That is fine since it isn't being passed up.  If that changes we 
+        ! ! will need to add:
+        ! ! nnz_prime = nnz_prime - 1
+        ! call dtime(values,time)
 
-
-        ! open(unit=8, file=filenameR, status="replace", iostat=os)   
-        ! do i = 1,ncells+1
-        !         write(8,*) R(i)
-        ! end do
-        ! close(8)
-
-        ! write(*,*) "NNZ = ", nnz
-        ! write(*,*) "NNZ_prime = ", nnz_prime
-
-
-        
-        ! **************************************************************
-        ! END DEBUG CODE
-        ! **************************************************************
-
-        nnz_prime = 1 ! re-init
-        productC(1) = nnz_prime
-        productV = zero
-
-        do k = 1,ngroups
-            do i = 1,ncells
-                ! if (nnz_prime == 916) then
-                !     write(*,*) productV(1,1,nnz_prime)
-                ! end if
-                added = .false.
-                do j = R(i),(R(i+1)-1)
-                    intermediateProduct = V(:,:,j) * Restrict(k,C(j))
-                    if ( any(intermediateProduct(:,:) /= zero) ) then
-                        productV(:,:,nnz_prime) = productV(:,:,nnz_prime) + intermediateProduct
-                        productR(nnz_prime) = i
-                        added = .true.
-                    end if
-                end do
-                ! if (any(productV(:,:,nnz_prime) /= zero)) then
-                !     write(*,*) productV(1,1,nnz_prime)
-                ! end if
-                if (added) nnz_prime = nnz_prime + 1
-            end do
-            productC(k+1) = nnz_prime
-        end do
-        ! Note: nnz_prime is now one higher than it should be.  That is fine since it isn't being passed up.  If that changes we 
-        ! will need to add:
+        ! write(*,*) "Old Method:", time
         ! nnz_prime = nnz_prime - 1
 
+        ! call dtime(values,time)
+
+        call sparse_sparse_pre_alloc(ncells,C,R,ProlongC,ProlongR,nnz_prime)
+
+        ! call dtime(values,time)
+        ! write(*,*) "NNZ_Prime Count AP:", time
+        
+        ! call dtime(values,time)
+
+        allocate(productV(5,5,nnz_prime))
+        allocate(productC(    nnz_prime))
+        call sparse_sparse_row_wise_product_AP(ncells,V,C,R,ProlongC,ProlongR,nnz_prime,productV,productC,productR)
+        ! call dtime(values,time)
+
+        ! write(*,*) "New Method AP:", time
+        ! write(*,*)
     end subroutine A_times_P
 
 
-    subroutine R_A_P(ncells,ngroups,nnz,Restrict,V,C,R,RAP_V,RAP_C,RAP_R,nnz_prime_final)
+    subroutine R_A_P(ncells,ngroups,nnz,RestrictC,RestrictR,ProlongC,ProlongR,V,C,R,RAP_V,RAP_C,RAP_R,nnz_prime_final)
         ! This subroutine computes the restriction matrix A' = RAP for algebraic multi grid and stores it using BCSM.
         ! Note: since piecewise injection is being used P = (R^T), so only R is needed (indices are just swapped).
         use module_common_data , only : p2, zero
@@ -175,10 +203,14 @@ contains
         integer, intent(in) :: ncells                                   ! # of cells for the coarse mesh
         integer, intent(in) :: ngroups                                  ! # of groups on the restricted level
         integer, intent(in) :: nnz                                      ! # of nonzero entries in the fine A matrix
-        integer, dimension(ngroups,ncells), intent(in) :: Restrict      ! Restriction matrix
+        integer, dimension(ncells), intent(in) :: RestrictC             ! Restriction matrix Columns
+        integer, dimension(ngroups + 1), intent(in) :: RestrictR        ! Restriction matrix Columns
+        integer, dimension(ncells), intent(in) :: ProlongC              ! Restriction matrix Columns
+        integer, dimension(ncells + 1), intent(in) :: ProlongR          ! Restriction matrix Columns
         real(p2), dimension(5,5,nnz), intent(in) :: V                   ! Block Sparse Compressed Matrix (BSCM) values of A matrix
         integer, dimension(nnz), intent(in) :: C                        ! BCSM Columns of A matrix
         integer, dimension(ncells+1), intent(in) :: R                   ! BCSM Rows of A matrix
+        ! integer,dimension(ngroups,ncells) :: Restrict
 
         real(p2), dimension(:,:,:), allocatable, INTENT(OUT) :: RAP_V   ! BCSM Values of restricted A matrix
         integer, dimension(:), allocatable, INTENT(OUT) :: RAP_C        ! BCSM Columns of restricted A matrix
@@ -186,49 +218,510 @@ contains
         integer, optional, intent(out) :: nnz_prime_final               ! (Optional) # of nonzero values in restricted A matrix
 
         real(p2), dimension(:,:,:), allocatable :: AP_V                 ! BCSM Values of intermediate A*(R^T) matrix
-        integer, dimension(:), allocatable :: AP_R                      ! BCSM Columns of intermediate A*(R^T) matrix
-        integer, dimension(ngroups + 1):: AP_C                          ! BCSM Rows of intermediate A*(R^T) matrix
-        
+        integer, dimension(:), allocatable :: AP_C                      ! BCSM Rows of intermediate A*(R^T) matrix
+        integer, dimension(ncells + 1) :: AP_R                          ! BCSM Columns of intermediate A*(R^T) matrix
+
+        ! real(p2), dimension(:,:,:), allocatable :: AP_VOLD                 ! BCSM Values of intermediate A*(R^T) matrix
+        ! integer, dimension(:), allocatable :: AP_ROLD                      ! BCSM Rows of intermediate A*(R^T) matrix
+        ! integer, dimension(ngroups+ 1) :: AP_COLD                          ! BCSM Columns of intermediate A*(R^T) matrix
+
+        ! real(p2), dimension(:,:,:), allocatable :: RAP_VOLD   ! BCSM Values of restricted A matrix
+        ! integer, dimension(:), allocatable :: RAP_COLD        ! BCSM Columns of restricted A matrix
+        ! integer, dimension(ngroups + 1) :: RAP_ROLD           ! BCSM Rows of restricted A matrix
+
         integer :: i, j, k, nnz_prime
+        real :: time
+        real, dimension(2) :: values
         
         nnz_prime = 0
-        call A_times_P(ncells,ngroups,nnz,V,C,R,Restrict,AP_V,AP_C,AP_R)
+        
+        ! call dtime(values,time) 
+        call A_times_P(ncells,ngroups,nnz,V,C,R,ProlongC,ProlongR,AP_V,AP_C,AP_R)
+        ! call dtime(values,time)
 
-        do k = 1,ngroups
-            mid_column : do i = 1,ngroups
-                do j = AP_C(i),(AP_C(i+1)-1)
-                    if (Restrict(k,AP_R(j)) == 1) then
-                        nnz_prime = nnz_prime + 1
-                        cycle mid_column
-                    end if
-                end do
-            end do mid_column
-        end do
+        ! write(*,*) "AP time:", time, " seconds"
+        ! call dtime(values,time) 
+        ! OLD
+        ! do k = 1,ngroups
+        !     mid_column : do i = 1,ngroups
+        !         do j = AP_COLD(i),(AP_COLD(i+1)-1)
+        !             if (Restrict(k,AP_ROLD(j)) == 1) then
+        !                 nnz_prime = nnz_prime + 1
+        !                 cycle mid_column
+        !             end if
+        !         end do
+        !     end do mid_column
+        ! end do
+
+        ! allocate(RAP_VOLD(5,5,nnz_prime))
+        ! allocate(RAP_COLD(    nnz_prime))
+        ! call dtime(values,time)
+        ! write(*,*) "RAP allocate time:", time, " seconds"
+        ! call dtime(values,time)
+
+        ! RAP_VOLD = zero
+        ! ! reset nnz_prime (to 1)
+        ! RAP_ROLD(1) = 1
+        ! nnz_prime = 1
+        ! do k = 1,ngroups
+        !     do i = 1,ngroups
+        !         do j = AP_COLD(i),(AP_COLD(i+1)-1)
+        !             if (Restrict(k,AP_ROLD(j)) == 1) then
+        !                 RAP_VOLD(:,:,nnz_prime) = RAP_VOLD(:,:,nnz_prime) + AP_VOLD(:,:,j)
+        !             end if
+        !         end do 
+        !         RAP_COLD(nnz_prime) = i
+        !         if (any(RAP_VOLD(:,:,nnz_prime) /= zero)) nnz_prime = nnz_prime + 1
+        !     end do
+        !     RAP_ROLD(k+1) = nnz_prime
+        ! end do
+
+        ! call dtime(values,time)
+
+        call sparse_sparse_pre_alloc(ngroups,RestrictC,RestrictR,AP_C,AP_R,nnz_prime)
+
+        ! call dtime(values,time)
+        ! write(*,*) "NNZ_Prime Count RAP:", time
+        
+        ! call dtime(values,time)
 
         allocate(RAP_V(5,5,nnz_prime))
         allocate(RAP_C(    nnz_prime))
-        RAP_V = zero
-        ! reset nnz_prime (to 1)
-        RAP_R(1) = 1
-        nnz_prime = 1
-        do k = 1,ngroups
-            do i = 1,ngroups
-                do j = AP_C(i),(AP_C(i+1)-1)
-                    RAP_V(:,:,nnz_prime) = RAP_V(:,:,nnz_prime) + AP_V(:,:,j) * Restrict(k,AP_R(j))
-                end do 
-                RAP_C(nnz_prime) = i
-                if (any(RAP_V(:,:,nnz_prime) /= zero)) nnz_prime = nnz_prime + 1
-            end do
-            RAP_R(k+1) = nnz_prime
-        end do
+        call sparse_sparse_row_wise_product_RAP(ngroups,RestrictC,RestrictR,AP_V,AP_C,AP_R,nnz_prime,RAP_V,RAP_C,RAP_R)
+        ! call dtime(values,time)
+
+        ! write(*,*) "New Method RAP:", time
+        ! write(*,*)
 
         deallocate(AP_V)
-        deallocate(AP_R)
+        deallocate(AP_C)
 
         if (present(nnz_prime_final)) nnz_prime_final = nnz_prime
+        ! call dtime(values,time)
 
+        ! write(*,*) "RAP build time:", time, " seconds"
 
     end subroutine R_A_P 
+
+    subroutine sparse_sparse_pre_alloc(A_m,AC,AR,BC,BR,nnz_prime)
+        
+        implicit none
+        
+        integer, intent(in) :: A_m  ! Height of A
+        integer, dimension(:), intent(in) :: AC         ! Column indices of A
+        integer, dimension(A_m+1), intent(in) :: AR     ! Row indices of A
+    
+        integer, dimension(:), intent(in) :: BC         ! Column indices of B
+        integer, dimension(:), intent(in) :: BR         ! Row indices of B
+
+        integer, intent(out) :: nnz_prime   ! number of nonzero values in the output
+
+        integer :: i,j,b_i,b_j, column
+        integer, dimension(:), pointer          :: queue1_C
+        integer, dimension(:), allocatable      :: queue2_C
+        allocate(queue1_C(10))
+        allocate(queue2_C(4))
+        nnz_prime = 0
+        do i = 1,A_m
+            do j = AR(i),(AR(i+1)-1)
+                b_i = AC(j);
+                column = 1
+                if (j == AR(i)) then
+                    if (BR(b_i+1)-BR(b_i) > size(queue1_C)) then
+                        if (associated(queue1_C)) deallocate(queue1_C)
+                        allocate(queue1_C(BR(b_i+1)-BR(b_i) ))
+                    end if
+                    queue1_C = 0
+                    do b_j = BR(b_i),(BR(b_i+1)-1)
+                        queue1_C(column) = BC(b_j)
+                        column = column + 1
+                    end do
+                else
+                    if (BR(b_i+1)-BR(b_i) > size(queue2_C)) then
+                        if (allocated(queue2_C)) deallocate(queue2_C)
+                        allocate(queue2_C(BR(b_i+1)-BR(b_i) ))
+                    end if
+                    queue2_C = 0
+                    do b_j = BR(b_i),(BR(b_i+1)-1)
+                        queue2_C(column) = BC(b_j)
+                        column = column + 1
+                    end do
+                    call queue_sort(queue1_C,size(queue1_C),queue2_C,size(queue2_C))
+                end if
+            end do
+            nnz_prime = nnz_prime + size(queue1_C)
+        end do
+
+    end subroutine sparse_sparse_pre_alloc
+
+    subroutine sparse_sparse_row_wise_product_RAP(A_m,AC,AR,BV,BC,BR,nnz_prime, prodV,prodC,prodR)
+        ! This function performs an efficient computation of A*B=C where A is m*n block matrix and B is n*k logical array, and A,B, 
+        ! and C are all stored using a Compressed Sparse Row Matrix format.  The method is based off the paper 
+        ! https://doi.org/10.1109/MICRO50266.2020.00068
+        ! 
+        !
+        ! Each row of C is defined as follows:
+        ! C(1,:) = A(1,1)*B(1,:) + A(1,2)*B(2,:) + ... + A(1,n)*B(n,:)
+        ! This has the benefit of being able to use two CSR matrices without transposition.  Additionally, for sparse matrices the
+        ! number of terms in each row is relatively small.  As a result, only nonzero products will be calculated.
+        ! It does require merge-soring the resulting rows as they are computed, however because the two queues are already 
+        ! pre-sorted this can be done rather efficiently.
+        ! 
+        ! Also note: Because A is a logical array, and therefore only true indices are stored, the AV vector is unnecessary.
+        
+        use module_common_data , only : p2, zero
+
+        implicit none
+
+        integer, intent(in) :: A_m  ! Height of A
+        ! logical, dimension(:), intent(in) :: AV         ! values of A
+        integer, dimension(:), intent(in) :: AC         ! Column indices of A
+        integer, dimension(A_m+1), intent(in) :: AR     ! Row indices of A
+        
+        real(p2), dimension(:,:,:), intent(in) :: BV    ! Values of B
+        integer, dimension(:), intent(in) :: BC         ! Column indices of B
+        integer, dimension(:), intent(in) :: BR         ! Row indices of B
+
+        integer, intent(in) :: nnz_prime    ! number of nonzero values in the output
+
+        real(p2),dimension(5,5,nnz_prime), intent(out) :: prodV ! Values of C
+        integer, dimension(nnz_prime), INTENT(OUT) :: prodC     ! Column indices of C
+        integer,dimension(A_m+1), INTENT(OUT) :: prodR          ! Row indices of C
+
+        integer :: i,j,b_i,b_j, column, length
+        logical :: queue1_link = .false.
+        real(p2), dimension(:,:,:), pointer     :: queue1_V
+        real(p2), dimension(:,:,:), allocatable :: queue2_V
+        integer, dimension(:), pointer          :: queue1_C
+        integer, dimension(:), allocatable      :: queue2_C
+
+        integer, dimension(:), allocatable, target      :: tempC
+        real(p2), dimension(:,:,:), allocatable, target :: tempV
+        
+        prodR(1) = 1
+        allocate(queue1_C(1))
+        allocate(queue2_C(10))
+        allocate(queue1_V(5,5,1))
+        allocate(queue2_V(5,5,10))
+        queue1_C = 0
+        queue2_C = 0
+        queue1_V = zero
+        queue2_V = zero
+        do i = 1,A_m
+            do j = AR(i),(AR(i+1)-1)
+                b_i = AC(j);
+                column = 1
+                if (j == AR(i)) then
+                    if (queue1_link) then
+                        ! deallocate(tempC)
+                        ! deallocate(tempV)
+                        nullify(queue1_C)
+                        nullify(queue1_V)
+                        allocate(queue1_C(BR(b_i+1)-BR(b_i) ))
+                        allocate(queue1_V(5,5,BR(b_i+1)-BR(b_i) ))
+                        queue1_link = .false.
+                    elseif (BR(b_i+1)-BR(b_i) > size(queue1_C)) then
+                        if (associated(queue1_C)) deallocate(queue1_C)
+                        if (associated(queue1_V)) deallocate(queue1_V)
+                        allocate(queue1_C(BR(b_i+1)-BR(b_i) ))
+                        allocate(queue1_V(5,5,BR(b_i+1)-BR(b_i) ))
+                    end if
+                    queue1_C = 0
+                    queue1_V = zero
+                    do b_j = BR(b_i),(BR(b_i+1)-1)
+                        queue1_C(column) = BC(b_j)
+                        queue1_V(:,:,column) = BV(:,:,b_j)
+                        column = column + 1
+                    end do
+                    if ((AR(i+1)-AR(i)) == 1) then
+                        length = size(queue1_C)
+                        ! if (.not. allocated(tempC)) then
+                        !     allocate(tempC(length))
+                        !     allocate(tempV(5,5,length))
+                        ! elseif (size(tempC) < length) then
+                            if (allocated(tempC)) deallocate(tempC)
+                            if (allocated(tempV)) deallocate(tempV)
+                            allocate(tempC(length))
+                            allocate(tempV(5,5,length))
+                        ! end if
+                        tempC = 0
+                        tempV(:,:,1:length) = queue1_V(:,:,:)
+                        tempC = queue1_C
+                        queue1_V                 => tempV(:,:,1:column-1)
+                        queue1_C                 => tempC(1:column-1)
+                        queue1_link = .true.
+                    end if
+                else
+                    if (BR(b_i+1)-BR(b_i) > size(queue2_C)) then
+                        if (allocated(queue2_C)) deallocate(queue2_C)
+                        if (allocated(queue2_V)) deallocate(queue2_V)
+                        allocate(queue2_C(BR(b_i+1)-BR(b_i) ))
+                        allocate(queue2_V(5,5,BR(b_i+1)-BR(b_i) ))
+                    end if
+                    queue2_C = 0
+                    queue2_V = zero
+                    do b_j = BR(b_i),(BR(b_i+1)-1)
+                        queue2_C(column) = BC(b_j)
+                        queue2_V(:,:,column) = BV(:,:,b_j)
+                        column = column + 1
+                    end do
+                    call queue_sort_5x5(queue1_V,queue1_C,size(queue1_C),queue2_V,queue2_C,size(queue2_C))
+                end if
+            end do
+            prodR(i+1) = prodR(i) + size(queue1_C)
+            prodV(:,:,prodR(i):(prodR(i+1)-1)) = queue1_V
+            prodC(prodR(i):(prodR(i+1)-1)) = queue1_C
+        end do
+
+        if (allocated(tempC)) deallocate(tempC)
+        if (allocated(tempV)) deallocate(tempV)
+    end subroutine sparse_sparse_row_wise_product_RAP
+
+    subroutine sparse_sparse_row_wise_product_AP(A_m,AV,AC,AR,BC,BR,nnz_prime, prodV,prodC,prodR)
+        ! This function performs an efficient computation of A*B=C where A is m*n block matrix and B is n*k logical array, and A,B, 
+        ! and C are all stored using a Compressed Sparse Row Matrix format.  The method is based off the paper 
+        ! https://doi.org/10.1109/MICRO50266.2020.00068
+        ! 
+        !
+        ! Each row of C is defined as follows:
+        ! C(1,:) = A(1,1)*B(1,:) + A(1,2)*B(2,:) + ... + A(1,n)*B(n,:)
+        ! This has the benefit of being able to use two CSR matrices without transposition.  Additionally, for sparse matrices the
+        ! number of terms in each row is relatively small.  As a result, only nonzero products will be calculated.
+        ! It does require merge-soring the resulting rows as they are computed, however because the two queues are already 
+        ! pre-sorted this can be done rather efficiently.
+        ! 
+        ! Also note: Because B is a logical array, and therefore only true indices are stored, the BV vector is unnecessary.
+        
+        use module_common_data , only : p2, zero
+
+        implicit none
+
+        integer, intent(in) :: A_m  ! Height of A
+        real(p2), dimension(:,:,:), intent(in) :: AV    ! values of A
+        integer, dimension(:), intent(in) :: AC         ! Column indices of A
+        integer, dimension(A_m+1), intent(in) :: AR     ! Row indices of A
+        
+        ! logical, dimension(:), intent(in) :: BV    ! Values of B
+        integer, dimension(:), intent(in) :: BC         ! Column indices of B
+        integer, dimension(:), intent(in) :: BR         ! Row indices of B
+
+        integer, intent(in) :: nnz_prime    ! number of nonzero values in the output
+
+        real(p2),dimension(5,5,nnz_prime), intent(out) :: prodV ! Values of C
+        integer, dimension(nnz_prime), INTENT(OUT) :: prodC     ! Column indices of C
+        integer,dimension(A_m+1), INTENT(OUT) :: prodR          ! Row indices of C
+
+        integer :: i,j,b_i,b_j, column
+        real(p2), dimension(:,:,:), pointer     :: queue1_V
+        real(p2), dimension(:,:,:), allocatable :: queue2_V
+        integer, dimension(:), pointer          :: queue1_C
+        integer, dimension(:), allocatable      :: queue2_C
+
+        prodR(1) = 1
+        allocate(queue1_C(10))
+        allocate(queue2_C(10))
+        allocate(queue1_V(5,5,10))
+        allocate(queue2_V(5,5,10))
+        queue1_C = 0
+        queue2_C = 0
+        queue1_V = zero
+        queue2_V = zero
+        do i = 1,A_m
+            do j = AR(i),(AR(i+1)-1)
+                b_i = AC(j);
+                column = 1
+                if (j == AR(i)) then
+                    if (BR(b_i+1)-BR(b_i) > size(queue1_C)) then
+                        if (associated(queue1_C)) deallocate(queue1_C)
+                        if (associated(queue1_V)) deallocate(queue1_V)
+                        allocate(queue1_C(BR(b_i+1)-BR(b_i) ))
+                        allocate(queue1_V(5,5,BR(b_i+1)-BR(b_i) ))
+                    end if
+                    queue1_C = 0
+                    queue1_V = zero
+                    do b_j = BR(b_i),(BR(b_i+1)-1)
+                        queue1_C(column) = BC(b_j)
+                        queue1_V(:,:,column) = AV(:,:,j)
+                        column = column + 1
+                    end do
+                else
+                    if (BR(b_i+1)-BR(b_i) > size(queue2_C)) then
+                        if (allocated(queue2_C)) deallocate(queue2_C)
+                        if (allocated(queue2_V)) deallocate(queue2_V)
+                        allocate(queue2_C(BR(b_i+1)-BR(b_i) ))
+                        allocate(queue2_V(5,5,BR(b_i+1)-BR(b_i) ))
+                    end if
+                    queue2_C = 0
+                    queue2_V = zero
+                    do b_j = BR(b_i),(BR(b_i+1)-1)
+                        queue2_C(column) = BC(b_j)
+                        queue2_V(:,:,column) = AV(:,:,j)
+                        column = column + 1
+                    end do
+                    call queue_sort_5x5(queue1_V,queue1_C,size(queue1_C),queue2_V,queue2_C,size(queue2_C))
+                end if
+            end do
+            prodR(i+1) = prodR(i) + size(queue1_C)
+            prodV(:,:,prodR(i):(prodR(i+1)-1)) = queue1_V
+            prodC(prodR(i):(prodR(i+1)-1)) = queue1_C
+        end do
+
+    end subroutine sparse_sparse_row_wise_product_AP
+
+    subroutine queue_sort_5x5(queue1_V,queue1_C,length1,queue2_V,queue2_C,length2)
+        use module_common_data , only : p2, zero
+        
+        implicit none
+
+        real(p2), dimension(:,:,:), pointer, intent(inout) :: queue1_V
+        integer, dimension(:), pointer, intent(inout) :: queue1_C
+        integer, intent(in) :: length1
+        integer, intent(in) :: length2
+        real(p2), dimension(5,5,length2), intent(inout) :: queue2_V
+        integer, dimension(length2), intent(inout) :: queue2_C
+        
+
+        real(p2), dimension(:,:,:), pointer  :: helperV
+        integer, dimension(:), pointer :: helperC
+        integer :: i, j, k
+
+        allocate(helperV(5,5,length1+length2))
+        allocate(helperC(length1+length2))
+        helperV = zero
+        helperC = 0
+        i = 1
+        j = 1
+        k = 1
+        do
+            if (queue1_C(i) == 0 .and. queue2_C(j) == 0) exit
+            if (queue1_C(i) == 0) then
+                helperV(:,:,k) = queue2_V(:,:,j)
+                helperC(k)     = queue2_C(j)
+                j = j + 1
+                if (j > length2) then
+                    j = length2
+                    queue2_C(j) = 0
+                end if
+            elseif (queue2_C(j) == 0) then
+                helperV(:,:,k) = queue1_V(:,:,i)
+                helperC(k)     = queue1_C(i)
+                i = i + 1
+                if (i > length1) then
+                    i = length1
+                    queue1_C(i) = 0
+                end if
+            elseif (queue1_C(i) > queue2_C(j)) then
+                helperV(:,:,k) = queue2_V(:,:,j)
+                helperC(k)     = queue2_C(j)
+                j = j + 1
+                if (j > length2) then
+                    j = length2
+                    queue2_C(j) = 0
+                end if
+            elseif (queue1_C(i) == queue2_C(j)) then
+                helperV(:,:,k) = queue1_V(:,:,i) + queue2_V(:,:,j)
+                helperC(k)     = queue2_C(j)
+                i = i + 1
+                if (i > length1) then
+                    i = length1
+                    queue1_C(i) = 0
+                end if
+                j = j + 1
+                if (j > length2) then
+                    j = length2
+                    queue2_C(j) = 0
+                end if
+            else
+                helperV(:,:,k) = queue1_V(:,:,i)
+                helperC(k)     = queue1_C(i)
+                i = i + 1
+                if (i > length1) then
+                    i = length1
+                    queue1_C(i) = 0
+                end if
+            end if
+            k = k + 1
+        end do
+        if (associated(queue1_C)) deallocate(queue1_C)
+        if (associated(queue1_V)) deallocate(queue1_V)
+        queue1_C => helperC(1:k-1)
+        queue1_V => helperV(:,:,1:k-1)
+        nullify(helperC)
+        nullify(helperV)
+        queue2_C = 0
+        queue2_V = zero
+
+    end subroutine queue_sort_5x5
+
+    subroutine queue_sort(queue1_C,length1,queue2_C,length2)
+        use module_common_data , only : p2, zero
+        
+        implicit none
+
+        integer, dimension(:), pointer, intent(inout) :: queue1_C
+        integer, intent(in) :: length1
+        integer, intent(in) :: length2
+        integer, dimension(length2), intent(inout) :: queue2_C
+        
+        integer, dimension(:), pointer :: helperC
+        integer :: i, j, k
+
+        allocate(helperC(length1+length2))
+        helperC = 0
+        i = 1
+        j = 1
+        k = 1
+        do
+            if (queue1_C(i) == 0 .and. queue2_C(j) == 0) exit
+            if (queue1_C(i) == 0) then
+                helperC(k)     = queue2_C(j)
+                j = j + 1
+                if (j > length2) then
+                    j = length2
+                    queue2_C(j) = 0
+                end if
+            elseif (queue2_C(j) == 0) then
+                helperC(k)     = queue1_C(i)
+                i = i + 1
+                if (i > length1) then
+                    i = length1
+                    queue1_C(i) = 0
+                end if
+            elseif (queue1_C(i) > queue2_C(j)) then
+                helperC(k)     = queue2_C(j)
+                j = j + 1
+                if (j > length2) then
+                    j = length2
+                    queue2_C(j) = 0
+                end if
+            elseif (queue1_C(i) == queue2_C(j)) then
+                helperC(k)     = queue2_C(j)
+                i = i + 1
+                if (i > length1) then
+                    i = length1
+                    queue1_C(i) = 0
+                end if
+                j = j + 1
+                if (j > length2) then
+                    j = length2
+                    queue2_C(j) = 0
+                end if
+            else
+                helperC(k)     = queue1_C(i)
+                i = i + 1
+                if (i > length1) then
+                    i = length1
+                    queue1_C(i) = 0
+                end if
+            end if
+            k = k + 1
+        end do
+        if (associated(queue1_C)) deallocate(queue1_C)
+        queue1_C => helperC(1:k-1)
+        nullify(helperC)
+        queue2_C = 0
+        
+    end subroutine queue_sort
 
     subroutine insertion_sort_index(x,index)
         ! This routine uses insertion sort sort the input vector x and returns the output vector index
@@ -331,6 +824,7 @@ contains
         end do
 
     end subroutine vector_times_sparse
+    
     subroutine destroy_A(V,C)
         use module_common_data , only : p2
         ! Deallocates any allocated value and column arrays
