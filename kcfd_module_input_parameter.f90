@@ -90,7 +90,7 @@ module module_input_parameter
 
           write(*,*)
           write(*,*) "-------------------------------------------------------"
-          write(*,*) " Reading the input file: input.nml...."
+          write(*,*) " Reading the input file: ", namelist_file ,"...."
           write(*,*)
 
           open(unit=10,file=trim(namelist_file),form='formatted',status='old',iostat=os)

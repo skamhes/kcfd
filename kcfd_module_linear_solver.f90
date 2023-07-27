@@ -90,9 +90,7 @@ contains
     end subroutine linear_relaxation
 
     recursive subroutine linear_sweeps(ncells,V,C,R,nnz,res,Dinv,level,correction)
-    ! recursive subroutine linear_sweeps(ncells,cell,V,C,R,nnz,res,Dinv,level,correction)
-        ! Subroutine to perform the smoothing of the linear system using Gauss-Seidel iteration.  Currently there's a bunch of
-        ! commented out code which I'm leaving as reference.  Once I have things definetly working I'll clean things up a little.
+        ! This subroutine relaxes the system using a Gauss-Seidel method with Algebraic Multigrid.
 
         use module_common_data,     only : p2, zero, one, lrelax_sweeps_actual, my_eps, half, amg_direction, roc, two, fourth
         use module_ccfv_data_grid,  only : cc_data_type, jacobian_type
@@ -153,11 +151,6 @@ contains
                             b = b - matmul(V(:,:,k),correction(:,C(k)))
                         end if
                     end do gs_row_loop
-                    ! gs_nghbr_loop : do k = 1,cell(i)%nnghbrs
-                    !     ! Add RHS from off diagonal terms and du (du = zero to start and will be updated as we go)
-                    !     b = b - matmul(jac(i)%off_diag(:,:,k), correction(:,cell(i)%nghbr(k)))
-                    ! end do gs_nghbr_loop 
-
                     ! ! Update du by the GS relaxation:
                     !
                     ! e.g., for 3 nghbrs, perform the relaxation in the form:
@@ -276,9 +269,7 @@ contains
             
             if (use_amg .and. (level <= max_amg_levels) .and.  & 
                 (ii > 5) .and. (roc/roc_previous > half) .and. (amg_direction == 'up')) then 
-                    ! will probably play with the convergence condition here some
                 call algebraic_multigrid(ncells,correction, V, C, R, nnz, res, level, additive_correction)
-                ! call algebraic_multigrid(ncells,cell,correction, V, C, R, nnz, res, level, additive_correction)
                 do i = 1,ncells
                     correction(:,i) = correction(:,i) + additive_correction(:,i)
                 end do
@@ -288,191 +279,10 @@ contains
         !--------------------------------------------------------------------------------
         ! write(*,*) ii
     end subroutine linear_sweeps
-
-    
-    ! recursive subroutine linear_sweepsOLD(ncells,cell,jac,level,correction)
-    !     ! This is being kept for reference purposes (for now)
-    !     use module_common_data,     only : p2, zero, one, lrelax_sweeps_actual, my_eps, half, amg_direction, roc, two
-    !     use module_ccfv_data_grid,  only : cc_data_type, jacobian_type
-    !     use module_input_parameter, only : solver_type, lrelax_sweeps, lrelax_tolerance, lrelax_scheme, &
-    !                                         use_amg, max_amg_levels
-
-    !     implicit none
-    !     integer, intent(in)                                 :: ncells
-    !     type(cc_data_type), dimension(ncells), intent(in)   :: cell
-    !     type(jacobian_type), dimension(ncells), intent(in)  :: jac
-    !     integer, intent(in)                                 :: level
-    !     real(p2), dimension(5,ncells), intent(out)          :: correction
-        
-    !     real(p2), dimension(5,ncells)                       :: additive_correction
-    !     ! Residual norms(L1,L2,Linf)
-    !     real(p2), dimension(5,3)    :: linear_res_norm, linear_res_norm_init, linear_res_norm_prev
-
-    !     real(p2), dimension(5)      :: b
-    !     integer                     :: i, ii, k, os
-        
-    !     ! Linear system residual
-    !     real(p2), dimension(5)      :: linear_res
-
-    !     ! Under-relaxation parameter
-    !     real(p2) :: omega_lrelax
-
-    !     ! Rate of convergence
-    !     real(p2) :: roc_previous
-
-    !     ! Initialize some variables
-    !     omega_lrelax         = one
-
-    !     !--------------------------------------------------------------------------------
-    !     ! 1. Initialize the correction
-    
-    !     correction = zero
-
-    !     !--------------------------------------------------------------------------------
-    !     ! 2. Linear Relaxation (Sweep)
-    !     relax : do ii = 1,lrelax_sweeps
-    !         linear_res_norm(:,1) = zero
-    !         !---------------------------------------------------------
-    !         ! Sequential Gauss-Seidel Relaxation(sweep)
-    !         if (trim(lrelax_scheme) == 'gs') then
-    !             gs_loop : do i = 1,ncells
-    !                 ! Form the right hand side of GS: [ sum( off_diagonal_block*du ) - residual ]
-    !                 b = jac(i)%RHS
-    !                 gs_nghbr_loop : do k = 1,cell(i)%nnghbrs
-    !                     ! Add RHS from off diagonal terms and du (du = zero to start and will be updated as we go)
-    !                     b = b - matmul(jac(i)%off_diag(:,:,k), correction(:,cell(i)%nghbr(k)))
-    !                 end do gs_nghbr_loop 
-    !                 ! Update du by the GS relaxation:
-    !                 !
-    !                 ! e.g., for 3 nghbrs, perform the relaxation in the form:
-    !                 !
-    !                 !                     diagonal block        sum of off-diagonal block contributions
-    !                 !       dUj = omega*{ [V/dtj+dR/dUj]^{-1}*(-[dRj/dU1]*dU1 -[dRj/dU2]*dU2 -[dRj/dU3]*dU3 -Res_j) - dUj }
-    !                 linear_res = matmul(jac(i)%diag_inv(:,:), b) - correction(:,i)
-    !                 correction(:,i) = correction(:,i) + omega_lrelax * linear_res
-    !                 linear_res_norm(:,1) = linear_res_norm(:,1) + abs(linear_res)
-    !             end do gs_loop
-    !         else
-    !             write(*,*) " Sorry, only 'gs' is available at the moment..."
-    !             write(*,*) " Set lrelax_scheme = 'gs', and try again. Stop."
-    !             stop
-    !         end if
-    !         !---------------------------------------------------------
-    !         linear_res_norm(:,1) = linear_res_norm(:,1) / real(ncells, p2)
-
-    !         !--------------------------------------------------------------------------------
-    !         ! 3. Check the linear residual.
-
-    !         !  After the first relaxation
-    !         if (ii == 1) then
-    !             !-----------------------------------------------------------------
-    !             ! Print the initial linear residual norm in the file 'fort.1000'.
-
-    !             linear_res_norm_init = linear_res_norm
-    !             !write(1000,'(a,i10,a,es12.5)') "  after relax ", ii, &
-    !             !            " max(L1 norm) = ", maxval(linear_res_norm(:,1))
-
-    !             if ( maxval(linear_res_norm(:,1)) < my_eps ) then
-    !                 !write(1000,*) " Machine zero res reached. Exit GS relaxation. Total sweeps = ", ii
-    !                 !write(1000,*) " tolerance_linear = ", lrelax_tolerance
-    !                 lrelax_sweeps_actual = ii
-    !                 exit relax
-    !             endif
-    !         ! After the second Relaxation
-    !         else 
-    !             roc = maxval(linear_res_norm(1:5,1)/linear_res_norm_init(1:5,1))
-
-    !             !-----------------------------------------------------------------
-    !             ! Print the current linear residual norm in the file 'fort.1000'.
-    !             if (roc < one) then
-    !                 !write(1000,'(a,i10,a,es12.5,2x,f6.3,2x,f8.3)')   "  after relax ", ii,          &
-    !                 !            " max(L1 norm) = ", maxval(linear_res_norm(1:5,1)), omega_lrelax, roc
-    !             else
-
-    !                 !write(1000,'(a,i10,a,es12.5,2x,f6.3,2x,f8.3,a)') "  after relax ", ii,          &
-    !                 !        " max(L1 norm) = ", maxval(linear_res_norm(1:5,1)), omega_lrelax, roc," <- diverge"
-    !             endif
-    !             !-----------------------------------------------------------------
-    !             ! Tolerance met: Exit
-
-    !             ! if (roc < lrelax_tolerance) then
-    !             if (roc < lrelax_tolerance/(2.25_p2*level-1.25_p2)) then
-    !                                         ! level = 1 => lrelax, level = 5 => lrelax/10
-    !             ! if (roc < min(lrelax_tolerance*(10**(level-1)),two)) then
-    !                 !write(1000,*)
-    !                 !write(1000,*) " Tolerance met. Exit GS relaxation. Total sweeps = ", ii
-    !                 !write(1000,*) " tolerance_linear = ", lrelax_tolerance
-    !                 lrelax_sweeps_actual = ii
-    !                 ! write(*,*) ii
-    !                 exit relax
-    !             !-----------------------------------------------------------------
-    !             ! If tolerance is NOT met.
-    !             else
-
-    !                 !---------------------------------------------
-    !                 ! Stop if the linear residual is too small.
-            
-    !                 if ( maxval(linear_res_norm(1:5,1)) < my_eps ) then
-    !                 !    write(1000,*)
-    !                 !    write(1000,*) " Residuals too small. Exit GS relaxation. Total sweeps = ", ii
-    !                 !    write(1000,*) " maxval(linear_res_norm(1:5,1)) = ", maxval(linear_res_norm(1:5,1))
-    !                     lrelax_sweeps_actual = ii
-    !                     exit relax
-    !                 endif
-            
-    !                 !-------------------------------------------------
-    !                 ! Stop if the maximum number of sweeps is reached.
-            
-    !                 if (ii == lrelax_sweeps) then
-    !                 !    write(1000,*)
-    !                 !    write(1000,*) " Tolerance not met... sweeps = ", lrelax_sweeps
-    !                     lrelax_sweeps_actual = lrelax_sweeps
-    !                 endif
-    !             end if
-
-    !             ! End of Tolerance met or NOT met.
-    !             !-----------------------------------------------------------------
-
-    !             !-----------------------------------------------------------------
-    !             ! Do something if we continue.
-    !             ! Reduce/increase the relaxation factor if it's going worse/better.
-
-    !             roc_previous = maxval(linear_res_norm_prev(1:5,1)/linear_res_norm_init(1:5,1))
-
-    !             !--------------------------------------------------------------
-    !             ! If the linear residual goes beyond the initial one,
-    !             if (roc > one) then
-    !                 ! REDUCE if the linear residual increases from the previous relaxation.
-    !                 if (roc > roc_previous) omega_lrelax = max(0.95_p2*omega_lrelax, 0.05_p2)
-    !                 !--------------------------------------------------------------
-    !                 ! If the linear residual is smaller than the initial one,
-    !             else
-    !                 ! INCREASE if doing fine.
-    !                 omega_lrelax = min(1.05_p2*omega_lrelax, one)
-    !                 if (roc < roc_previous) omega_lrelax = min(1.25_p2*omega_lrelax, one)    
-    !             endif
-            
-    !             ! End of Do something if we continue.
-    !             !-----------------------------------------------------------------
-            
-    !         endif
-    !         linear_res_norm_prev = linear_res_norm
-            
-    !         ! if (use_amg .and. (level <= max_amg_levels) .and.  & 
-    !         !     (ii > 10) .and. (roc/roc_previous > half) .and. (amg_direction == 'up')) then ! will probably play with the convergence condition here some
-    !         !     call algebraic_multigrid(ncells,cell,correction, jac, level, additive_correction)
-    !         !     do i = 1,ncells
-    !         !         correction(:,i) = correction(:,i) + additive_correction(:,i)
-    !         !     end do
-    !         ! end if
-    !     end do relax
-    !     ! End of 3. Linear Relaxation (Sweep)
-    !     !--------------------------------------------------------------------------------
-
-    ! end subroutine linear_sweepsOLD
     
     recursive subroutine algebraic_multigrid(ncells,phi,V,C,R,nnz,res,level,correction_del)
-    ! recursive subroutine algebraic_multigrid(ncells,cell,phi,V,C,R,nnz,res,level,correction_del)
+    
+        ! Implementation of algebraic multi grid using additive correction.
         use module_common_data   , only : p2, zero, amg_direction
         use module_ccfv_data_grid, only : cc_data_type, jacobian_type, test, jac
         use module_jacobian      , only : gewp_solve
@@ -482,20 +292,19 @@ contains
         implicit none
         ! Input
         integer                                              :: ncells ! number of cells (level 1) or groups (level 2+)
-        ! type(cc_data_type), dimension(ncells), intent(in)    :: cell   ! cell data (level 1) or group data stored as a cell (l2)
-        ! real(p2), dimension(ncells), intent(in)              :: dtau   ! dtau ! pretty sure I don't need this
         real(p2), dimension(5,ncells), intent(in)            :: phi    ! dependent variables (du for level 1, del for level 2+)
-        ! type(jacobian_type), dimension(ncells), intent(in)   :: jac
         real(p2), dimension(:,:,:), intent(in)               :: V   ! Values (5x5 block matrix) plus corresponding index
         integer, dimension(:), intent(in)                    :: C   ! Column index of each value
         integer,dimension(ncells+1), intent(in)              :: R   ! Start index of each new row
         integer, intent(in)                                  :: nnz
         real(p2), dimension(5,ncells), intent(in)            :: res    ! RHS of the equation
         integer, intent(in)                                  :: level  ! Multigrid level (not sure if we'll need it yet)
+        
         ! Output
         real(p2), dimension(5,ncells), intent(out)           :: correction_del ! prolongated correction factor (del) to be 
                                                                            ! passed to finer level
 
+        ! Local Vars
         real(p2), dimension(:,:), allocatable :: g_correction ! restricted correction factor
         real(p2)                            :: strongest_A11, group_size, current_n
         real(p2), dimension(3)              :: A11_nghbrs
@@ -503,36 +312,21 @@ contains
         integer, dimension(ncells)          :: assign_group
         integer                             :: i, j, k, ck, gi, kk, os, ii, nz_count
         integer                             :: ngroup
-        integer                             :: idestat, strongest_k, last_k
-        type(cc_data_type),  dimension(:), allocatable :: group_cell
-        type(jacobian_type), dimension(:), allocatable :: group
+        integer                             :: idestat
 
         real(p2), dimension(5,ncells)       :: defect ! defect used in RHS for AMG
         real(p2), dimension(:,:), allocatable :: defect_res ! R(A*phi + b)
-        real(p2), dimension(:,:), allocatable :: defect_resOLD ! R(A*phi + b)
-
-        integer, dimension(1000) :: temp_nghbr, temp_gnghbr
 
         ! Restricted Vars
-        integer, dimension(:,:), allocatable    :: Restrict
         integer, dimension(ncells)              :: RestrictC, ProlongC
-        integer, dimension(ncells + 1)          :: RestrictR, ProlongR
+        integer, dimension(ncells + 1)          :: RestrictR, ProlongR ! Restrict array is longer than needed but this proves fine.
         real(p2), dimension(:,:,:), allocatable :: RAP_V
         integer, dimension(:), allocatable      :: RAP_C
         integer, dimension(:), allocatable      :: RAP_R
         real(p2), dimension(:,:,:), allocatable :: RAP_Dinv
 
-        ! Debugging Vars
-        ! real(p2), dimension(5,ncells) :: correction_old
-        real :: time, sum
-        real, dimension(2) :: values
-        sum = zero
-        ! real(p2), dimension(5,5) :: current_diag, current_diag_inv
-        ! real(p2),dimension(5,5,4) :: current_off_diag
-        ! real(p2), dimension(5) :: current_rhs
-        ! call dtime(values,time)
         ! Initialize var
-        assign_group = zero
+        assign_group = 0
         correction_del = zero
         ngroup = 0
         RestrictR(1) = 1
@@ -542,14 +336,10 @@ contains
             ! Initialize
             ngroup = ngroup + 1
             group_size = 1
-            last_k = 0
             A11_nghbrs = zero
             strongest_3nghbr = 0
             assign_group(i) = ngroup
             do j = R(i),(R(i+1)-1)
-                if (C(j) == 0) then
-                    write(*,*) j
-                end if
                 if (C(j) == i .or. assign_group(C(j)) /= 0) cycle ! skip diagonal and already assigned
                 current_n = ABS(V(1,1,j))
                 if (current_n > A11_nghbrs(1)) then
@@ -561,17 +351,15 @@ contains
                 end if
             end do
             if ( all(strongest_3nghbr(:) == 0)) then ! all neighbors are in a group
-                ! assign_group(i) = assign_group(C(R(i))) ! just add it to the neighbor of group 1 (theoretically this 
-                ! ! could result in groups as large as 6 but this is unlikely and the cut off of 4 is somewhat arbitrary)
-                ! ngroup = ngroup - 1 ! remove the group
-                ! Were just making a group of 1.  Works better with the CSRM matrix format
+                ! Were just making a group of 1.  May look to add to a neighboring group in the future.  Adds some complexity to the
+                ! CSRM foramtion of the restriction matrix.
                 ProlongC(i) = ngroup
                 RestrictR(ngroup + 1)        = RestrictR(ngroup) + 1 
                 RestrictC(RestrictR(ngroup)) = i
                 cycle assign_cells
             end if
-            ! we only make it here if group_size < 4
-            ! so we're just gonna keep adding cells till we get to 4
+            ! We only make it here if group_size < 4
+            ! So we're just going to keep adding cells till we get to 4
             do j = 1,3
                 if ( strongest_3nghbr(j) /= 0 ) then
                     assign_group(strongest_3nghbr(j)) = ngroup
@@ -585,13 +373,10 @@ contains
                 RestrictR(ngroup + 1) = RestrictR(ngroup) + 4
                 RestrictC(RestrictR(ngroup):(RestrictR(ngroup+1)-1)) = insertion_sort_int((/i,strongest_3nghbr/),4)
                 cycle ! if all 3 neighbors have been assigned we don't need to look for more
-            ! only get here if they haven't been
+                ! only get here if they haven't been
             end if
             nghbr_group_add : do j = R(strongest_3nghbr(3)) , (R(strongest_3nghbr(3) + 1) - 1) 
                 ! move to row of strongest neighbor
-                if (C(j) == 0) then
-                    write(*,*) j
-                end if
                 if ( assign_group(C(j)) /= 0 .or. j == C(R(i)) ) cycle ! allready assigned or diagonal
                 current_n = ABS(V(1,1,j))
                 if (current_n > A11_nghbrs(1)) then
@@ -624,30 +409,12 @@ contains
             end if
         end do assign_cells
 
-        ! call dtime(values,time)
-        ! sum = sum + time
-        ! write(*,*) "Build Group: ",time," seconds "
-        ! call dtime(values,time)
-
-        ! Build restriction matrix
-        ! allocate(Restrict(ngroup,ncells))
-        ! call create_restriction_matrix(ncells,ngroup,assign_group,Restrict)
-        
-        ! call dtime(values,time)
-        ! sum = sum + time
-        ! write(*,*) "Build Restriction Matrix: ",time," seconds "
-        ! call dtime(values,time)
-        
+        ! Create coarse level operetor A^H = RAP
         allocate(RAP_R(ngroup + 1))
         call R_A_P(ncells,ngroup,nnz,RestrictC,RestrictR,ProlongC,ProlongR,V,C,R,RAP_V,RAP_C,RAP_R,os)
         
-        ! call dtime(values,time)
-        ! sum = sum + time
-        ! write(*,*) "Build RAP: ",time," seconds "
-        ! call dtime(values,time)
-        
+        ! Create inverse block matrix of RAP diagonal terms
         allocate(RAP_Dinv(5,5,ngroup))
-        
         do gi = 1,ngroup
             do j = RAP_R(gi),(RAP_R(gi+1)-1)
                 if (RAP_C(j) == gi) then ! diag
@@ -655,56 +422,39 @@ contains
                 end if
             end do
         end do
-        ! call dtime(values,time)
-        ! sum = sum + time
-        ! write(*,*) "Build D_inv: ",time," seconds "
-        ! call dtime(values,time)
+        
+        ! Calculate and restrict the defect d = A*phi + b
         call compute_defect(ncells,V,C,R,phi,res,defect)
         allocate(defect_res(5,ngroup))
-        ! allocate(defect_resOLD(5,ngroup))
         defect_res = zero
         do i = 1,ngroup
             do j = RestrictR(i),(RestrictR(i+1)-1)
                 defect_res(:,i) = defect_res(:,i) + defect(:,RestrictC(j))
             end do
         end do
-        ! do i = 1,5
-        !     defect_resOLD(i,:) = matmul(Restrict(:,:),defect(i,:))
-        ! end do
-        ! call dtime(values,time)
-        ! sum = sum + time
-        ! write(*,*) "Compute Defect: ",time," seconds "
-        ! write(*,*) "Total Time: ",sum," seconds "
-        ! call dtime(values,time)
-        ! Call the linear solver to relax the newly coarsened system.
-        allocate(g_correction(5,ngroup))
-        
-        call linear_sweeps(ngroup, RAP_V,RAP_C,RAP_R,nnz,defect_res,RAP_Dinv, level + 1, g_correction)
 
+        ! Call the linear solver to relax the newly coarsened system and apply the correction.
+        allocate(g_correction(5,ngroup))
+        call linear_sweeps(ngroup, RAP_V,RAP_C,RAP_R,nnz,defect_res,RAP_Dinv, level + 1, g_correction)
         do i = 1,ncells
             ! Since ProlongC has 1 value per row we can skip the inner j loop.
             correction_del(:,i) = g_correction(:,ProlongC(i))
         end do
-        ! do i = 1,5
-        !     ! Piecewise injection means the correction gets added to all members of the group without modification
-        !     ! del_phi           =                  P (=R^T) * del      
-        !     correction_del(i,:) = matmul(transpose(Restrict),g_correction(i,:))
-        ! end do
-        ! deallocate(group)
-        if (allocated(group_cell))   deallocate(group_cell)
+
+        ! Make sure all of the allocated arrays are deallocated
         if (allocated(RAP_V))        deallocate(     RAP_V)
         if (allocated(RAP_C))        deallocate(     RAP_C)
         if (allocated(RAP_R))        deallocate(     RAP_R)
         if (allocated(RAP_Dinv))     deallocate(  RAP_Dinv)
         if (allocated(defect_res))   deallocate(defect_res)
         if (allocated(g_correction)) deallocate(g_correction)
-        ! Deallocate
-        !call destroy_cells(ngroup, group)
+
         amg_direction = 'dn' ! we've finished a multigrid level that means we're going back down the levels
     end subroutine algebraic_multigrid
 
     subroutine create_restriction_matrix(ncells,ngroups,assign_group,Restriction)
-        ! Builds a restriction matrix by recognizing that the row of R defines the group and the column defines the cell
+        ! Builds a rank 2 restriction matrix by recognizing that the row of R defines the group and the column defines the cell
+        ! Currently not used by kept around for debugging purposes in case it is needed.
         use  module_common_data , only : p2
 
         implicit none
@@ -724,6 +474,7 @@ contains
     end subroutine create_restriction_matrix
 
     subroutine compute_defect(ncells,V,C,R,phi,b,defect)
+        ! Computes the defect d = A*phi + b
         use module_common_data , only : p2
         use module_sparse_matrix , only : sparseblock_times_vectorblock
 
@@ -747,6 +498,8 @@ contains
     end subroutine compute_defect
 
     subroutine restrict_defect(ncells,ngroups,defect,restrict,product)
+        ! Compute the restricted defect R*d
+        ! Note: this function is not currently used.  Kept for debugging purposes (same as create_restriction_matrix subroutine)
         use module_common_data , only : p2
 
         implicit none
@@ -786,6 +539,8 @@ contains
     end subroutine build_Dinv_array
 
     subroutine LU_extraction(ncells,nnz,V,C,R,LU_V,LU_C,LU_R)
+        ! I made this to use with the Gauss-Seidel method but it turns out I didn't need it.
+        ! Might as well keep it...
         use module_common_data , only : p2
 
         implicit none
@@ -822,6 +577,11 @@ contains
     end subroutine LU_extraction
 
     function insertion_sort_int(x,length)
+        ! Performs insertion sort on the list x of integers
+        ! While insertion sort is O(n^2) it is generally very efficient for very short lists. The maximum number of elements this
+        ! subroutine will experience is currently 4 so a very simple sorting method should be more efficient than a better scaling
+        ! but more complex method.
+        
         implicit none
         integer, intent(in)                    :: length
         integer, dimension(length), intent(in) :: x

@@ -30,12 +30,13 @@ contains
         use module_ccfv_limiter   , only : phi
         implicit none
 
-        !integer                       :: i_iteration = 0
-        !real(p2), dimension(5)        :: res_norm, res_norm_initial
-        
-        !real(p2), dimension(5,ncells) :: local_res
         integer                       :: i, n_residual_evaluation
         integer                       :: L1 = 1
+
+        ! Timing Variables
+        real                          :: time, totalTime
+        real, dimension(2)            :: values
+        integer                       :: minutes, seconds
         
         var_ur_array = zero
         do i = 1,5
@@ -64,7 +65,7 @@ contains
         write(*,*)
         if (trim(solver_type) == "implicit") then
             write(*,*) " Iteration   continuity   x-momemtum   y-momentum   z-momentum    energy       max-res", &
-                "    |   proj     reduction"
+                "    |   proj     reduction       time"
             allocate( du(5,ncells)) ! allocate du only if it needed
         else
             write(*,*) " Iteration   continuity   x-momemtum   y-momentum   z-momentum    energy       max-res"
@@ -82,18 +83,26 @@ contains
             call compute_residual
             !local_res = res
             call compute_residual_norm(res_norm)
+            call dtime(values,time)
+            totalTime = time * real(solver_max_itr-i_iteration) ! total time remaining in seconds
+            minutes = floor(totalTime/60.0)
+            seconds = mod(int(totalTime),60)
             if (i_iteration == 0 .and.(.not.import_data)) then
                 res_norm_initial = res_norm
+                minutes = 0
+                seconds = 0
                 do i = 1,5
                     if (abs(res_norm_initial(i)) < 1e-014_p2) then
                         res_norm_initial(i) = one ! prevents infinity res/res_norm_init
                     end if
                 end do
             end if
+
             if ( trim(solver_type) == "implicit" ) then
 
-                write(*,'(i10,6es13.3,a,i6,es12.1)') i_iteration, res_norm(:), maxval(res_norm(:)/res_norm_initial(:)), &
-                                                  "   | ", lrelax_sweeps_actual, lrelax_roc
+                write(*,'(i10,6es13.3,a,i6,es12.1,i10.2,a,i2.2)') i_iteration, res_norm(:), & 
+                                                  maxval(res_norm(:)/res_norm_initial(:)), &
+                                                  "   | ", lrelax_sweeps_actual, lrelax_roc, minutes, ":", seconds
             else
                 write(*,'(i10,6es13.3)') i_iteration, res_norm(:), maxval(res_norm(:)/res_norm_initial(:))
             end if
