@@ -47,6 +47,10 @@ module module_input_parameter
     logical                :: import_data = .false.
     logical                :: perturb_initial = .false.
     logical                :: use_amg = .true. ! use algebraic multigrid to accelerate convergence of linear implicit solver
+
+    ! Navier-Stokes Info
+    logical :: navier_stokes = .false.
+    real(p2) :: R = 287.058 ! ideal gas constant for air
   
   ! End of Default input values
   !-------------------------------------------------------------------------
@@ -80,7 +84,9 @@ module module_input_parameter
     lrelax_tolerance     , &
     variable_ur          , &
     use_amg              , &
-    max_amg_levels        
+    max_amg_levels       , &
+    navier_stokes        , &
+    R
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)

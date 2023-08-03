@@ -111,7 +111,7 @@ contains
         npyr                  , & !# of pyramids, and list
         nprs, prs             , & !# of prisms, and list
         nhex                  , & !# of hex, and list
-        ! hex, pyr            , & ! currently unsupported
+        hex, & !, pyr            , & ! currently unsupported
         nb                    , & !# of boundaries
         ix, iy, iz            , & !ix=1, iy=2, iz=3
         p2                    , & !Double precision
@@ -136,8 +136,8 @@ contains
         integer, dimension(6,4)     :: tempv
         integer, dimension(6)       :: tempc
         integer                     ::   i,   j,   k,  kk,  ck
-        integer                     ::  v1,  v2,  v3,  v4,  v5,  v6     ! these may have been shifted to specific subroutines
-        integer                     :: vk1, vk2, vk3, vk4, vk5, vk6, vk ! these may have been shifted to specific subroutines
+        integer                     ::  v1,  v2,  v3,  v4,  v5,  v6, v7, v8 ! these may have been shifted to specific subroutines
+        integer                     :: vk1, vk2, vk3, vk4, vk5, vk6, vk7, vk8, vk 
         integer                     ::  c1,  c2                             ! left and right cells for vol calc
         real(p2)                    ::  x1,  x2,  x3,  x4  
         real(p2)                    ::  y1,  y2,  y3,  y4
@@ -197,7 +197,7 @@ contains
         ! Count number of cells
         ncells = ntet + nhex + nprs + npyr
         ! check that there are only supported cells (currently tet and prs)
-        if (ncells /= ntet + nprs) then
+        if (ncells /= ntet + nprs +  nhex) then
             write(*,*) " Unsupported Grid Elements Present. Stop"
             stop
         end if
@@ -210,7 +210,7 @@ contains
         tet_loop : do i = 1, ntet
             cell(cellCounter)%nvtx = 4
             allocate(cell(cellCounter)%vtx(4))  ! allocate array of size 4
-            cell(cellCounter)%vtx(:) = tet(i,:)
+            cell(cellCounter)%vtx(:) = tet(i,:) ! I should switch the rank major of this but I don't want to right now...
             cellCounter = cellCounter + 1
         end do tet_loop
 
@@ -221,6 +221,12 @@ contains
             cellCounter = cellCounter + 1
         end do prs_loop
 
+        hex_loop : do i = 1,nhex
+            cell(cellCounter)%nvtx = 8
+            allocate(cell(cellCounter)%vtx(8)) ! allocate array of size 8
+            cell(cellCounter)%vtx(:) = hex(i,:)
+            cellCounter = cellCounter + 1
+        end do hex_loop
         !Now we can loop over all cells by cell(i), i=1,ncells, instead
         !of loop over triangles and then quads. Good.
 
@@ -249,6 +255,18 @@ contains
                 cell(i)%xc = ( x(v1) + x(v2) + x(v3) + x(v4) + x(v5) + x(v6) ) / 6.0_p2
                 cell(i)%yc = ( y(v1) + y(v2) + y(v3) + y(v4) + y(v5) + y(v6) ) / 6.0_p2
                 cell(i)%zc = ( z(v1) + z(v2) + z(v3) + z(v4) + z(v5) + z(v6) ) / 6.0_p2
+            elseif (cell(i)%nvtx == 8) then ! hex cell
+                v1 = cell(i)%vtx(1)
+                v2 = cell(i)%vtx(2)
+                v3 = cell(i)%vtx(3)
+                v4 = cell(i)%vtx(4)
+                v5 = cell(i)%vtx(5)
+                v6 = cell(i)%vtx(6)
+                v7 = cell(i)%vtx(7)
+                v8 = cell(i)%vtx(8)
+                cell(i)%xc = ( x(v1) + x(v2) + x(v3) + x(v4) + x(v5) + x(v6) + x(v7) + x(v8) ) / 8.0_p2
+                cell(i)%yc = ( y(v1) + y(v2) + y(v3) + y(v4) + y(v5) + y(v6) + y(v7) + y(v8) ) / 8.0_p2
+                cell(i)%zc = ( z(v1) + z(v2) + z(v3) + z(v4) + z(v5) + z(v6) + z(v7) + z(v8) ) / 8.0_p2
             else
                 write(*,*) " Something is wrong. Invalid cell(i)%nvtx = ", cell(i)%nvtx, &
                         " at cell #: ", i
@@ -360,7 +378,7 @@ contains
             cell(i)%nnghbrs = 0
             ! call associate_face(i)
             ! check for supported cells (currently tet and prs)
-            if (.not.(pnvtx == 4 .or. pnvtx == 6)) then
+            if (.not.(pnvtx == 4 .or. pnvtx == 6 .or. pnvtx == 8)) then
                 write(*,*) " Unsopported cell shape"
                 stop
             end if
@@ -398,7 +416,7 @@ contains
                                 tempc(cell(i)%nnghbrs)   = 3  ! number of common vertices w/ nghbr cell
                                 exit find_nghbr1
                             end if
-                        elseif (cell(ck)%nvtx == 6) then
+                        else if (cell(ck)%nvtx == 6) then
                             vk1 = cell(ck)%vtx(1)
                             vk2 = cell(ck)%vtx(2)
                             vk3 = cell(ck)%vtx(3)
@@ -414,31 +432,35 @@ contains
                                 tempc(cell(i)%nnghbrs)   = 3  ! number of common vertices w/ nghbr cell
                                 exit find_nghbr1
                             end if
+                        else if (cell(ck)%nvtx == 8) then
+                            cycle
+                        else
+                            write(*,*) "Cell ", i ," is not a tet, prism, or hex... Something is wrong."
+                            stop
                         end if
-
                     end do find_nghbr1
                 end do face_k_tet_loop
             else if (pnvtx == 6) then
-                face_k_prism_loop : do k = 1, (cell(i)%nvtx )
+                face_k_prism_loop : do k = 1, 5
                     if (k == 1) then
                         v1 = cell(i)%vtx(korder(k))
                         v2 = cell(i)%vtx(2)
                         v3 = cell(i)%vtx(3)
-                    else if ( k == 2 ) then
+                    elseif ( k == 2 ) then
                         v3 = cell(i)%vtx(korder(k)) ! We need to revers the order of the top nodes
                         v2 = cell(i)%vtx(5)         ! That way we move CCW around the face (from 
                         v1 = cell(i)%vtx(6)         ! inside the cell).
-                    else if ( k == 3 ) then
+                    elseif ( k == 3 ) then
                         v1 = cell(i)%vtx(korder(k))
                         v2 = cell(i)%vtx(3)
                         v3 = cell(i)%vtx(6)
                         v4 = cell(i)%vtx(4)
-                    else if ( k == 4 ) then
+                    elseif ( k == 4 ) then
                         v1 = cell(i)%vtx(korder(k))
                         v2 = cell(i)%vtx(1)
                         v3 = cell(i)%vtx(4)
                         v4 = cell(i)%vtx(5)
-                    else if ( k == 5 ) then
+                    elseif ( k == 5 ) then
                         v1 = cell(i)%vtx(korder(k))
                         v2 = cell(i)%vtx(2)
                         v3 = cell(i)%vtx(5)
@@ -462,7 +484,7 @@ contains
                                     tempc(cell(i)%nnghbrs)   = 3  ! number of common vertices w/ nghbr cell
                                     exit find_nghbr2
                                 end if
-                            else if ( cell(ck)%nvtx == 6 ) then
+                            elseif ( cell(ck)%nvtx == 6 ) then
                                 vk1 = cell(ck)%vtx(1)
                                 vk2 = cell(ck)%vtx(2)
                                 vk3 = cell(ck)%vtx(3)
@@ -478,6 +500,11 @@ contains
                                     tempc(cell(i)%nnghbrs)   = 3  ! number of common vertices w/ nghbr cell
                                     exit find_nghbr2
                                 end if
+                            else if ( cell(ck)%nvtx == 8 ) then
+                                cycle
+                            else 
+                                write(*,*) "Cell ", i ," is not a tet, prism, or hex... Something is wrong."
+                                stop                                
                             end if
                         end do find_nghbr2
                     else if (k == 3 .or. k == 4 .or. k ==5) then
@@ -502,11 +529,115 @@ contains
                                     tempv(cell(i)%nnghbrs,4) = v4 ! Vertex 4 of the neighbor cell
                                     tempc(cell(i)%nnghbrs)   = 4  ! number of common vertices w/ nghbr cell
                                     exit find_nghbr3
-                                end if                                
+                                end if  
+                            else if ( cell(ck)%nvtx == 8 ) then
+                                vk1 = cell(ck)%vtx(1)
+                                vk2 = cell(ck)%vtx(2)
+                                vk3 = cell(ck)%vtx(3)
+                                vk4 = cell(ck)%vtx(4)
+                                vk5 = cell(ck)%vtx(5)
+                                vk6 = cell(ck)%vtx(6)
+                                vk7 = cell(ck)%vtx(7)
+                                vk8 = cell(ck)%vtx(8)
+                                if ( faceShareWithHex(v1,v2,v3,v4,vk1,vk2,vk3,vk4,vk5,vk6,vk7,vk8) ) then
+                                    cell(i)%nnghbrs = cell(i)%nnghbrs + 1
+                                    temp(cell(i)%nnghbrs) = ck ! Get the number of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,1) = v1 ! Vertex 1 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,2) = v2 ! Vertex 2 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,3) = v3 ! Vertex 3 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,4) = v4 ! Vertex 4 of the neighbor cell
+                                    tempc(cell(i)%nnghbrs)   = 4  ! number of common vertices w/ nghbr cell
+                                    exit find_nghbr3
+                                end if  
+                            else
+                                write(*,*) "Cell ", i ," is not a tet, prism, or hex... Something is wrong."
+                                stop                
                             end if
                         end do find_nghbr3
                     end if
                 end do face_k_prism_loop
+            else if (pnvtx == 8) then
+                face_k_hex_loop : do k = 1, 6
+                    if ( k == 1) then
+                        v1 = cell(i)%vtx(1)
+                        v2 = cell(i)%vtx(2)
+                        v3 = cell(i)%vtx(3)
+                        v4 = cell(i)%vtx(4)
+                    elseif ( k == 2) then
+                        v1 = cell(i)%vtx(5)
+                        v2 = cell(i)%vtx(6)
+                        v3 = cell(i)%vtx(2)
+                        v4 = cell(i)%vtx(1)
+                    elseif ( k == 3) then
+                        v1 = cell(i)%vtx(6)
+                        v2 = cell(i)%vtx(7)
+                        v3 = cell(i)%vtx(3)
+                        v4 = cell(i)%vtx(2)
+                    elseif ( k == 4) then
+                        v1 = cell(i)%vtx(7)
+                        v2 = cell(i)%vtx(8)
+                        v3 = cell(i)%vtx(4)
+                        v4 = cell(i)%vtx(3)
+                    elseif ( k == 5) then
+                        v1 = cell(i)%vtx(8)
+                        v2 = cell(i)%vtx(5)
+                        v3 = cell(i)%vtx(1)
+                        v4 = cell(i)%vtx(4)
+                    elseif ( k == 6) then
+                        v1 = cell(i)%vtx(8)
+                        v2 = cell(i)%vtx(7)
+                        v3 = cell(i)%vtx(6)
+                        v4 = cell(i)%vtx(5)
+                    endif
+                    find_nghbr4 : do kk = 1,node(v1)%nc ! for 1:number of cells connected to v1
+                            ck = node(v1)%c(kk)
+                            ! If the neighbor cell is a tet we can skip since we're looking at quads
+                            if (cell(ck)%nvtx == 4) then
+                                cycle
+                            else if (cell(ck)%nvtx == 6) then ! neighbor is a prism
+                                vk1 = cell(ck)%vtx(1)
+                                vk2 = cell(ck)%vtx(2)
+                                vk3 = cell(ck)%vtx(3)
+                                vk4 = cell(ck)%vtx(4)
+                                vk5 = cell(ck)%vtx(5)
+                                vk6 = cell(ck)%vtx(6)
+                                if ( faceShareWithPrism(v1,v2,v3,v4,vk1,vk2,vk3,vk4,vk5,vk6,'quad') ) then
+                                    cell(i)%nnghbrs = cell(i)%nnghbrs + 1
+                                    temp(cell(i)%nnghbrs) = ck ! Get the number of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,1) = v1 ! Vertex 1 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,2) = v2 ! Vertex 2 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,3) = v3 ! Vertex 3 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,4) = v4 ! Vertex 4 of the neighbor cell
+                                    tempc(cell(i)%nnghbrs)   = 4  ! number of common vertices w/ nghbr cell
+                                    exit find_nghbr4
+                                end if  
+                            else if ( cell(ck)%nvtx == 8 ) then
+                                vk1 = cell(ck)%vtx(1)
+                                vk2 = cell(ck)%vtx(2)
+                                vk3 = cell(ck)%vtx(3)
+                                vk4 = cell(ck)%vtx(4)
+                                vk5 = cell(ck)%vtx(5)
+                                vk6 = cell(ck)%vtx(6)
+                                vk7 = cell(ck)%vtx(7)
+                                vk8 = cell(ck)%vtx(8)
+                                if ( faceShareWithHex(v1,v2,v3,v4,vk1,vk2,vk3,vk4,vk5,vk6,vk7,vk8) ) then
+                                    cell(i)%nnghbrs = cell(i)%nnghbrs + 1
+                                    temp(cell(i)%nnghbrs) = ck ! Get the number of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,1) = v1 ! Vertex 1 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,2) = v2 ! Vertex 2 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,3) = v3 ! Vertex 3 of the neighbor cell
+                                    tempv(cell(i)%nnghbrs,4) = v4 ! Vertex 4 of the neighbor cell
+                                    tempc(cell(i)%nnghbrs)   = 4  ! number of common vertices w/ nghbr cell
+                                    exit find_nghbr4
+                                end if  
+                            else
+                                write(*,*) "Cell ", i ," is not a tet, prism, or hex... Something is wrong."
+                                stop                
+                            end if
+                        end do find_nghbr4
+                        
+                        
+                end do face_k_hex_loop
             end if cell_type
             ! Store the nighbors in the neghbor list
             allocate( cell(i)%nghbr(   cell(i)%nnghbrs )   )
@@ -771,6 +902,8 @@ contains
                                 bound(i)%bcell(j) = ck
                                 exit find_bnghbr
                             end if   
+                        elseif ( cell(ck)%nvtx == 8 ) then ! hex
+                            cycle find_bnghbr
                         end if
                     end do find_bnghbr
                 else if (bound(i)%bfaces(1,j) == 4) then ! quad face
@@ -781,7 +914,7 @@ contains
                     find_qnghbr : do kk = 1,node(v1)%nc
                         ck = node(v1)%c(kk)
                         if ( cell(ck)%nvtx == 4 ) then
-                            exit find_qnghbr
+                            cycle find_qnghbr
                         else if ( cell(ck)%nvtx == 6 ) then ! prism
                             vk1 = cell(ck)%vtx(1)
                             vk2 = cell(ck)%vtx(2)
@@ -794,6 +927,19 @@ contains
                                 bound(i)%bcell(j) = ck
                                 exit find_qnghbr
                             end if
+                        elseif ( cell(ck)%nvtx == 8 ) then ! hex
+                            vk1 = cell(ck)%vtx(1)
+                            vk2 = cell(ck)%vtx(2)
+                            vk3 = cell(ck)%vtx(3)
+                            vk4 = cell(ck)%vtx(4)
+                            vk5 = cell(ck)%vtx(5)
+                            vk6 = cell(ck)%vtx(6)
+                            vk7 = cell(ck)%vtx(7)
+                            vk8 = cell(ck)%vtx(8)
+                            if ( faceShareWithHex(v1,v2,v3,v4,vk1,vk2,vk3,vk4,vk5,vk6,vk7,vk8) ) then
+                                bound(i)%bcell(j) = ck
+                                exit find_qnghbr
+                            end if  
                         end if
                     end do find_qnghbr
                 end if
@@ -888,6 +1034,8 @@ contains
                         cell(i)%xc,cell(i)%yc,cell(i)%zc)
             else if (cell(i)%nvtx == 6) then
                 inside = .true. ! not implemented yet...
+            else if (cell(i)%nvtx == 8) then
+                inside = .true. ! not implemented yet...
             end if
             if (inside .eqv. .false.) then
                 write(*,*) " Cell ", i ," centroid is outside of cell.  Cannot continue. Stop!"
@@ -979,19 +1127,31 @@ contains
 
         !Use the maximum sqrt(vol) as a reference magnitude for checking zero face normal sum.
 
-        ref_mag = maxval( sqrt(cell(1:ncells)%vol) )
+        ref_mag = sqrt( maxval( cell(1:ncells)%vol) )
+
+
+
         write(*,*)
         write(*,*) "              Reference magnitude = ", ref_mag
         write(*,*) "      Machine zero w.r.t. ref mag = ", ref_mag*machine0_1
         write(*,*)
-        
+        do i = 1,ncells
+            if ( (abs(sum_face_normal( ix, i ))) > 50.0_p2*ref_mag*machine0_1 .or. &
+             (abs(sum_face_normal( iy, i ))) > 50.0_p2*ref_mag*machine0_1 .or. &
+             (abs(sum_face_normal( iz, i ))) > 50.0_p2*ref_mag*machine0_1       ) then
+                write(*,*) "Sum face noraml_x(", i ,") = ",sum_face_normal(ix,i)
+                write(*,*) "Sum face noraml_y(", i ,") = ",sum_face_normal(iy,i)
+                write(*,*) "Sum face noraml_z(", i ,") = ",sum_face_normal(iz,i)
+                write(*,*)
+            end if
+        end do
         if ( maxval(abs(sum_face_normal( ix, 1:ncells ))) > 50.0_p2*ref_mag*machine0_1 .or. &
              maxval(abs(sum_face_normal( iy, 1:ncells ))) > 50.0_p2*ref_mag*machine0_1 .or. &
              maxval(abs(sum_face_normal( iz, 1:ncells ))) > 50.0_p2*ref_mag*machine0_1       ) then
 
             write(*,*) " Max face vector sum over a cell is larger than machine zero... Something is wrong. Stop."
 
-        stop
+            stop
 
         endif
 
@@ -1152,8 +1312,63 @@ contains
             end if
         end if
     end function faceShareWithPrism
+
+    logical function faceShareWithhex(f1,f2,f3,f4,c1,c2,c3,c4,c5,c6,c7,c8)
+        implicit none
+        integer, intent(in) ::  f1,  f2,  f3,  f4                    ! Vertices of host cell face
+        integer, intent(in) ::  c1,  c2,  c3,  c4,  c5,  c6, c7, c8  ! Vertices of candidate neighbor cells
+        
+        faceShareWithHex = .false.
+        ! check settings are correct
+    
+        ! test if match with side 1
+        if ((f1 == c2 .and. f2 == c1 .and. f3 == c4 .and. f4 == c3) .or. &
+            (f1 == c1 .and. f2 == c4 .and. f3 == c3 .and. f4 == c2) .or. &
+            (f1 == c4 .and. f2 == c3 .and. f3 == c2 .and. f4 == c1) .or. &
+            (f1 == c3 .and. f2 == c2 .and. f3 == c1 .and. f4 == c4)) then
+            faceShareWithHex = .true.
+            return
+        ! test if match with side 2
+        elseif ((f1 == c6 .and. f2 == c5 .and. f3 == c1 .and. f4 == c2) .or. &
+            (f1 == c5 .and. f2 == c1 .and. f3 == c2 .and. f4 == c6) .or. &
+            (f1 == c1 .and. f2 == c2 .and. f3 == c6 .and. f4 == c5) .or. &
+            (f1 == c2 .and. f2 == c6 .and. f3 == c5 .and. f4 == c1)) then
+            faceShareWithHex = .true.
+            return
+        ! test if match with side 3
+        elseif ((f1 == c7 .and. f2 == c6 .and. f3 == c2 .and. f4 == c3) .or. &
+            (f1 == c3 .and. f2 == c7 .and. f3 == c6 .and. f4 == c2) .or. &
+            (f1 == c2 .and. f2 == c3 .and. f3 == c7 .and. f4 == c6) .or. &
+            (f1 == c6 .and. f2 == c2 .and. f3 == c3 .and. f4 == c7)) then
+            faceShareWithHex = .true.
+            return
+        ! test if match with side 4
+        elseif ((f1 == c8 .and. f2 == c7 .and. f3 == c3 .and. f4 == c4) .or. &
+            (f1 == c7 .and. f2 == c3 .and. f3 == c4 .and. f4 == c8) .or. &
+            (f1 == c3 .and. f2 == c4 .and. f3 == c8 .and. f4 == c7) .or. &
+            (f1 == c4 .and. f2 == c8 .and. f3 == c7 .and. f4 == c3)) then
+            faceShareWithHex = .true.
+            return
+        ! test if match with side 5
+        elseif ((f1 == c5 .and. f2 == c8 .and. f3 == c4 .and. f4 == c1) .or. &
+            (f1 == c8 .and. f2 == c4 .and. f3 == c1 .and. f4 == c5) .or. &
+            (f1 == c4 .and. f2 == c1 .and. f3 == c5 .and. f4 == c8) .or. &
+            (f1 == c1 .and. f2 == c5 .and. f3 == c8 .and. f4 == c4)) then
+            faceShareWithHex = .true.
+            return
+        ! test if match with side 6
+        elseif ((f1 == c5 .and. f2 == c6 .and. f3 == c7 .and. f4 == c8) .or. &
+            (f1 == c6 .and. f2 == c7 .and. f3 == c8 .and. f4 == c5) .or. &
+            (f1 == c7 .and. f2 == c8 .and. f3 == c5 .and. f4 == c6) .or. &
+            (f1 == c8 .and. f2 == c5 .and. f3 == c6 .and. f4 == c7)) then
+            faceShareWithHex = .true.
+            return
+        end if
+    
+    end function faceShareWithHex
+
     subroutine quadNormal(x1,y1,z1, x2,y2,z2, x3,y3,z3, x4,y4,z4,face_nrml_out,face_nrml_mag_out)
-        use module_common_data, only : p2 ! double precision
+        use module_common_data, only : p2, half ! double precision
         implicit none
         real(p2), intent(in) :: x1,y1,z1, x2,y2,z2, x3,y3,z3, x4,y4,z4 ! vertices of quad face
         real(p2), dimension(3), intent(out) ::  face_nrml_out          ! unit normal vecotr
@@ -1166,14 +1381,23 @@ contains
         ! Some local vars
         real(p2), dimension(3) :: normal1, normal2      ! normal vectors of the two triangles
         real(p2)               :: area1, area2, mag     ! area of the two triangles
+        real(p2)               :: nx, nx1
         
-        call trinormal(x1,y1,z1, x2,y2,z2, x3,y3,z3, normal1, area1)
-        call trinormal(x1,y1,z1, x3,y3,z3, x4,y4,z4, normal2, area2)
-        
-        face_nrml_out = normal1 + normal2
-        mag = sqrt(face_nrml_out(1)**2 + face_nrml_out(2)**2 + face_nrml_out(3)**2)
-        face_nrml_out = face_nrml_out/mag
-        face_nrml_mag_out = area1 + area2
+        ! call trinormal(x1,y1,z1, x2,y2,z2, x3,y3,z3, normal1, area1)
+        ! call trinormal(x1,y1,z1, x3,y3,z3, x4,y4,z4, normal2, area2)
+        ! nx1 = half*(y1*(z2-z3) + y2*(z3-z1) + y3*(z1-z2))
+        ! face_nrml_out = normal1 + normal2
+        ! mag = sqrt(face_nrml_out(1)**2 + face_nrml_out(2)**2 + face_nrml_out(3)**2)
+        ! face_nrml_out = face_nrml_out/mag
+        ! face_nrml_mag_out = area1 + area2
+        face_nrml_out(1) = half * (y1*(z2-z4) + y2*(z3-z1) + y3*(z4-z2) + y4*(z1-z3))
+        face_nrml_out(2) = half * (z1*(x2-x4) + z2*(x3-x1) + z3*(x4-x2) + z4*(x1-x3))
+        face_nrml_out(3) = half * (x1*(y2-y4) + x2*(y3-y1) + x3*(y4-y2) + x4*(y1-y3))
+        face_nrml_mag_out = sqrt(face_nrml_out(1)**2 + face_nrml_out(2)**2 + face_nrml_out(3)**2)
+        face_nrml_out = face_nrml_out/face_nrml_mag_out
+        ! write(*,*) face_nrml_out(1) - nx
+        ! write(*,*) normal1(1) - nx1
+        ! write(*,*)
     end subroutine quadNormal
     subroutine triNormal(x1,y1,z1, x2,y2,z2, x3,y3,z3,  normal, area)
         use module_common_data, only : p2, half ! double precision
@@ -1184,20 +1408,27 @@ contains
         ! Local Vars
         real(p2), dimension(3)              :: a, b 
         real(p2)                            :: mag
+        real(p2) :: nx,ny,nz
         ! This should be cleaned up at some point, perhaps when I get to the chapter in my book on libraries...
-        a(1) = x2-x1
-        a(2) = y2-y1  
-        a(3) = z2-z1
-        b(1) = x3-x1
-        b(2) = y3-y1  
-        b(3) = z3-z1          
-        ! Cross Product
-        normal(1) = (a(2)*b(3) - a(3)*b(2))
-        normal(2) = (a(3)*b(1) - a(1)*b(3))
-        normal(3) = (a(1)*b(2) - a(2)*b(1))
-        mag = sqrt(normal(1)**2 + normal(2)**2 + normal(3)**2)
-        normal = normal / mag
-        area = half * mag        
+        ! a(1) = x2-x1
+        ! a(2) = y2-y1  
+        ! a(3) = z2-z1
+        ! b(1) = x3-x1
+        ! b(2) = y3-y1  
+        ! b(3) = z3-z1          
+        ! ! Cross Product
+        ! normal(1) = half*(a(2)*b(3) - a(3)*b(2))
+        ! normal(2) = half*(a(3)*b(1) - a(1)*b(3))
+        ! normal(3) = half*(a(1)*b(2) - a(2)*b(1))
+        normal(1) = half*(y1*(z2-z3)+y2*(z3-z1)+y3*(z1-z2))
+        normal(2) = half*(z1*(x2-x3)+z2*(x3-x1)+z3*(x1-x2))
+        normal(3) = half*(x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2))
+        ! write(*,*) normal(1) - nx
+        ! write(*,*) normal(2) - ny
+        ! write(*,*) normal(3) - nz
+        area = sqrt(normal(1)**2 + normal(2)**2 + normal(3)**2)
+        normal = normal / area
+        ! area = half * mag        
     end subroutine triNormal
     subroutine get_tri_face_centroid(x1,y1,z1, x2,y2,z2, x3,y3,z3, triCentroid)
         use module_common_data, only : p2, one, three ! double precision

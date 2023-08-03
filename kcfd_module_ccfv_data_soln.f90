@@ -27,6 +27,7 @@ module module_ccfv_data_soln
     real(p2), dimension(:,:)  , pointer :: u     !conservative variables at cells/nodes.
     real(p2), dimension(:,:)  , pointer :: w     !primitive variables at cells/nodes.
     real(p2), dimension(:,:,:), pointer :: gradw !gradients of w at cells/nodes.
+    real(p2), dimension(:), allocatable :: Temp  ! Temperature (only used for Navier stokes EQ)
 
     real(p2), dimension(:)    , pointer :: dtau  !pseudo time step
     real(p2), dimension(:)    , pointer :: wsn   !maximum eigenvalue at faces
@@ -67,7 +68,7 @@ module module_ccfv_data_soln
 contains
     subroutine construct_ccfv_soln_data
         use module_common_data   , only : zero   !some p2 values
-
+        use module_input_parameter, only : navier_stokes
         use module_ccfv_data_grid, only : ncells !# of cells.
         implicit none
         ! 2D Euler/NS equations = 4 equations:
@@ -84,6 +85,7 @@ contains
 
         allocate( u(nq,ncells) )
         allocate( w(nq,ncells) )
+        if (navier_stokes) allocate( Temp(ncells) )
 
         ! Initialization
         u = zero
@@ -126,11 +128,12 @@ contains
     subroutine set_initial_solution
         use module_common_data    , only : p2, one, pi
         use module_ccfv_data_grid , only : ncells
-        use module_input_parameter, only : M_inf, aoa, sideslip, perturb_initial
+        use module_input_parameter, only : M_inf, aoa, sideslip, perturb_initial, navier_stokes, R
         implicit none
         
         integer                :: i
         real(p2), dimension(5) :: w_initial
+        real(p2)               :: T_initial
         
 
         !Set free stream values based on the input Mach number.
@@ -146,6 +149,8 @@ contains
         w_initial(iv) =   v_inf
         w_initial(iw) =   w_inf
         w_initial(ip) =   p_inf
+
+        T_initial = p_inf/(rho_inf*R)
         if (perturb_initial) then
             w_initial(iu) = 0.6
             w_initial(iv)= 0.6
@@ -158,7 +163,7 @@ contains
             
             !Compute and store conservative variables.
             u(:,i) = w2u( w_initial )
-            
+            if (navier_stokes) Temp(i) = T_initial
         end do cell_loop
 
     end subroutine set_initial_solution
