@@ -33,10 +33,11 @@
 
  !This module contains the following subroutines:
 
-  public ::          roe_ddt
-  public ::      rusanov_ddt
-  public ::          hll_ddt
-  public ::         rhll_ddt
+  public ::            roe_ddt
+  public ::        rusanov_ddt
+  public ::            hll_ddt
+  public ::           rhll_ddt
+  public ::  viscous_alpha_ddt
 
  contains
 
@@ -1186,4 +1187,196 @@
  end subroutine rhll_ddt
 !--------------------------------------------------------------------------------
 
+ subroutine viscous_alpha_ddt(ucL,ucR,gradwL,gradwR, njk,ejk,mag_ejk, numerical_flux)
+
+  use derivative_data_df5
+  use module_input_parameter , only : M_inf, Reynolds, C_0, Freestream_Temp
+
+  implicit none
+  integer , parameter :: p2 = selected_real_kind(15)
+ 
+ !Input
+  type(derivative_data_type_df5), dimension(5)  , intent( in) :: ucL     !Left state (conservative)
+  type(derivative_data_type_df5), dimension(5)  , intent( in) :: ucR     !Right state (conservative)
+  real(p2)                      , dimension(3,5), intent( in) :: gradwL  !Left gradient (primitive)
+  real(p2)                      , dimension(3,5), intent( in) :: gradwR  !Right gradient (primitive)
+  real(p2)                      , dimension(3)  , intent( in) :: njk     !Unit directed area vector
+  real(p2)                      , dimension(3)  , intent( in) :: ejk     !Unit edge vector
+  real(p2)                      ,                 intent( in) :: mag_ejk !Magnitude of the edge vector
+ 
+ !Output
+  type(derivative_data_type_df5), dimension(5), intent(out) :: numerical_flux !Numerical viscous flux
+ 
+ !Some constants
+  real(p2) ::       zero = 0.0_p2
+  real(p2) ::        one = 1.0_p2
+  real(p2) ::      three = 3.0_p2
+  real(p2) ::       half = 0.5_p2
+  real(p2) ::  two_third = 2.0_p2/3.0_p2
+  real(p2) :: four_third = 4.0_p2/3.0_p2
+ 
+  real(p2) ::          C! = C_0   !Parameter for Sutherland's law
+  real(p2) ::      gamma = 1.4_p2     !Ratio of specific heats
+  real(p2) ::    Prandtl = 0.72_p2    !Prandtl number
+  real(p2) ::     Re_inf! = Reynolds   !Free stream Reynolds number
+  real(p2) ::      T_inf! = Freestream_Temp   !Free stream temperature
+  ! real(p2) ::      M_inf = 2.0_p2     !Free stream Mach number
+ 
+ !Local variables
+  real(p2) :: alpha !Damping coefficient (see Nishikawa AIAA2010-5093)
+  real(p2) :: Lr    !Length scale        (see Nishikawa AIAA2010-5093)
+ 
+  type(derivative_data_type_df5) ::   uL, uR            ! x-velocity  (Left and Right states)
+  type(derivative_data_type_df5) ::   vL, vR            ! y-velocity  (Left and Right states)
+  type(derivative_data_type_df5) ::   wL, wR            ! z-velocity  (Left and Right states)
+  type(derivative_data_type_df5) :: rhoL, rhoR          ! Density     (Left and Right states)
+  type(derivative_data_type_df5) ::   pL, pR            ! Pressure    (Left and Right states)
+  type(derivative_data_type_df5) ::   TL, TR            ! Temperature (Left and Right states)
+ 
+  type(derivative_data_type_df5) :: tauxx, tauyy, tauzz !Viscous stresses: diagonal compontens
+  type(derivative_data_type_df5) :: tauxy, tauyz, tauzx !Viscous stresses: off-diagonal components
+  type(derivative_data_type_df5) :: tauyx, tauzy, tauxz !Viscous stresses: same as above by symmetry
+  type(derivative_data_type_df5) :: qx, qy, qz          !Heat flux components
+  type(derivative_data_type_df5) :: tauxn, tauyn, tauzn !Normal stresses
+  type(derivative_data_type_df5) :: qn                  !Normal heat flux
+ 
+  type(derivative_data_type_df5) :: u, v, w, T, mu                         !Interface quantities
+  type(derivative_data_type_df5), dimension(3) :: grad_u, grad_v, grad_w   !Interface gradients of velocities
+  type(derivative_data_type_df5), dimension(3) :: grad_rho, grad_p, grad_T !Interface gradients of rho, p, and T
+ 
+  real(p2), dimension(3) :: grad_uL, grad_vL, grad_wL, grad_rL, grad_pL
+  real(p2), dimension(3) :: grad_uR, grad_vR, grad_wR, grad_rR, grad_pR
+ 
+  type(derivative_data_type_df5) :: rho, a2   !Interface values for density and (speed of sound)^2
+ 
+  integer  :: ix, iy, iz    !Index to extract the x-, y-, and z-component.
+ 
+  C = C_0   !Parameter for Sutherland's law
+  Re_inf = Reynolds   !Free stream Reynolds number
+  T_inf = Freestream_Temp   !Free stream temperature
+  
+     alpha = one
+ 
+        ix = 1
+        iy = 2
+        iz = 3
+ 
+ ! Left and right states and gradients:
+ 
+        rhoL = ucL(1)
+          uL = ucL(2)/ucL(1)
+          vL = ucL(3)/ucL(1)
+          wL = ucL(4)/ucL(1)
+          pL = (gamma-one)*( ucL(5) - half*rhoL*(uL*uL+vL*vL+wL*wL) )
+ 
+     grad_rL = gradwL(:,1)
+     grad_uL = gradwL(:,2)
+     grad_vL = gradwL(:,3)
+     grad_wL = gradwL(:,4)
+     grad_pL = gradwL(:,5)
+ 
+        rhoR = ucR(1)
+          uR = ucR(2)/ucR(1)
+          vR = ucR(3)/ucR(1)
+          wR = ucR(4)/ucR(1)
+          pR = (gamma-one)*( ucR(5) - half*rhoR*(uR*uR+vR*vR+wR*wR) )
+ 
+     grad_rR = gradwR(:,1)
+     grad_uR = gradwR(:,2)
+     grad_vR = gradwR(:,3)
+     grad_wR = gradwR(:,4)
+     grad_pR = gradwR(:,5)
+ 
+ ! Temperature is identical to the speed of sound due to
+ ! the nondimensionalization.
+ 
+        TL = gamma*pL/rhoL
+        TR = gamma*pR/rhoR
+ 
+ ! Arithmetic averages of velocities and temperature.
+ 
+         u = half*(uL + uR)
+         v = half*(vL + vR)
+         w = half*(wL + wR)
+         T = half*(TL + TR)
+ 
+ ! Sutherland's law in the nondimensional form.
+ ! Note: The factor, M_inf/Re_inf, comes from nondimensionalization.
+ 
+        mu = (one+C/T_inf)/(T+C/T_inf)*T**(three*half) * M_inf/Re_inf
+ 
+ ! Damping coefficient, alpha:
+ !  (1)alpha=1   gives the central-difference formula in 1D.
+ !  (2)alpha=4/3 corresponds to the 4th-order diffusion scheme in 1D.
+ 
+     alpha = four_third
+ 
+ ! Lr = Length scale involving the skewness measure (see Nishikawa AIAA2010-5093)
+ ! This is the key quantity for robust and accurate computations on skewed grids.
+ 
+        Lr = half*abs( njk(ix)*ejk(ix) + njk(iy)*ejk(iy) + njk(iz)*ejk(iz) ) * mag_ejk
+ 
+ ! Interface gradients from the derived diffusion scheme (Nishikawa-AIAA2010-5093).
+ ! The second term is the damping term.
+ 
+    grad_u = half*( (grad_uR + grad_uL) + alpha/Lr*(uR-uL)*njk )
+    grad_v = half*( (grad_vR + grad_vL) + alpha/Lr*(vR-vL)*njk )
+    grad_w = half*( (grad_wR + grad_wL) + alpha/Lr*(wR-wL)*njk )
+ 
+ ! The temperature gradient is computed from the interface density and the pressure
+ ! gradients. 
+ ! Note: T = gamma*p/rho -> grad(T) = gamma*grad(p)/rho - (gamma*p/rho^2)*grad(rho)
+ 
+        rho = half*(rhoR + rhoL)
+         a2 = gamma*half*(pR + pL)/rho
+ 
+     grad_rho = half*( (grad_rR + grad_rL) + alpha/Lr*(rhoR-rhoL)*njk )
+     grad_p   = half*( (grad_pR + grad_pL) + alpha/Lr*(  pR-pL  )*njk )
+ 
+     grad_T   = ( gamma*grad_p - a2*grad_rho) /rho
+ 
+ ! Interface gradients have been computed: grad(u), grad(v), grad(w), grad(T).
+ ! We now evaluate the physical viscous flux with them.
+ 
+ ! Viscous stresses (Stokes' hypothesis is assumed)
+ 
+     tauxx =  mu*(four_third*grad_u(ix) - two_third*grad_v(iy) - two_third*grad_w(iz))
+     tauyy =  mu*(four_third*grad_v(iy) - two_third*grad_u(ix) - two_third*grad_w(iz))
+     tauzz =  mu*(four_third*grad_w(iz) - two_third*grad_u(ix) - two_third*grad_v(iy))
+ 
+     tauxy =  mu*(grad_u(iy) + grad_v(ix))
+     tauxz =  mu*(grad_u(iz) + grad_w(ix))
+     tauyz =  mu*(grad_v(iz) + grad_w(iy))
+ 
+     tauyx = tauxy
+     tauzx = tauxz
+     tauzy = tauyz
+ 
+ ! Heat fluxes: q = - mu*grad(T)/(Prandtl*(gamma-1))
+ 
+        qx = - mu*grad_T(ix)/(Prandtl*(gamma-one))
+        qy = - mu*grad_T(iy)/(Prandtl*(gamma-one))
+        qz = - mu*grad_T(iz)/(Prandtl*(gamma-one))
+ 
+ ! Normal components
+ 
+     tauxn = tauxx*njk(ix) + tauxy*njk(iy) + tauxz*njk(iz)
+     tauyn = tauyx*njk(ix) + tauyy*njk(iy) + tauyz*njk(iz)
+     tauzn = tauzx*njk(ix) + tauzy*njk(iy) + tauzz*njk(iz)
+        qn =    qx*njk(ix) +    qy*njk(iy) +    qz*njk(iz)
+ 
+ ! Evaluate the viscous flux at the interface
+ 
+     numerical_flux(1) =   zero
+     numerical_flux(2) = - tauxn
+     numerical_flux(3) = - tauyn
+     numerical_flux(4) = - tauzn
+     numerical_flux(5) = - (tauxn*u + tauyn*v + tauzn*w) + qn
+ 
+ ! Normal max wave speed
+ !    wsn = alpha*(mu/rho*gamma/Prandtl)/Lr
+ 
+  end subroutine viscous_alpha_ddt
+ !--------------------------------------------------------------------------------
+ 
  end module flux_functions_ddt

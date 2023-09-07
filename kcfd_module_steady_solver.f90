@@ -21,7 +21,7 @@ contains
     subroutine steady_solve
         use module_common_data    , only : p2, half, one, zero, i_iteration, du, lrelax_sweeps_actual, lrelax_roc
         use module_input_parameter, only : solver_type, accuracy_order, inviscid_flux, CFL, solver_max_itr, solver_tolerance, &
-                                           import_data, variable_ur, use_limiter
+                                           import_data, variable_ur, use_limiter, CFL_ramp, CFL_start, CFL_steps, CFL_start_iter
         use module_ccfv_data_soln , only : set_initial_solution, u, w, res, dtau, u2w, load_data_file, &
                                                 res_norm, res_norm_initial!, gradw, wsn
         use module_ccfv_data_grid , only : cell, ncells!, face
@@ -37,6 +37,8 @@ contains
         real                          :: time, totalTime
         real, dimension(2)            :: values
         integer                       :: minutes, seconds
+
+        real(p2)                      :: CFL_multiplier, CFL_end, CFL_running_mult
         
         var_ur_array = zero
         do i = 1,5
@@ -63,12 +65,26 @@ contains
 
         write(*,*) 
         write(*,*)
+
+        if (CFL_ramp) then
+            CFL_end = CFL
+            CFL = CFL_start
+            CFL_multiplier = (CFL_end/CFL_start)**(one/CFL_steps)
+            write(*,*) 'CFL Ramping Enabled'
+            write(*,*) 'CFL_start: ', CFL_start
+            write(*,*) 'CFL_steps: ', CFL_steps
+            write(*,*) 'CFL_mult:  ', CFL_multiplier
+            CFL_running_mult = CFL_multiplier
+            write(*,*)
+            write(*,*)
+        end if
+
         if (trim(solver_type) == "implicit") then
             write(*,*) " Iteration   continuity   x-momemtum   y-momentum   z-momentum    energy       max-res", &
-                "    |   proj     reduction       time"
+                "    |   proj     reduction       time    CFL"
             allocate( du(5,ncells)) ! allocate du only if it needed
         else
-            write(*,*) " Iteration   continuity   x-momemtum   y-momentum   z-momentum    energy       max-res"
+            write(*,*) " Iteration   continuity   x-momemtum   y-momentum   z-momentum    energy       max-res    |   time     CFL"
         end if
         
         ! Quick initialization
@@ -96,15 +112,25 @@ contains
                         res_norm_initial(i) = one ! prevents infinity res/res_norm_init
                     end if
                 end do
+            else if (i_iteration <= 5 .and. (.not. import_data)) then
+                if (maxval(res_norm(:)/res_norm_initial(:)) > one) then
+                    do i = 1,5
+                        if (abs(res_norm(i)) > 1e-014_p2) then
+                            res_norm_initial(i) = res_norm(i) ! prevents infinity res/res_norm_init
+                        end if
+                    end do
+                end if
             end if
+            
 
             if ( trim(solver_type) == "implicit" ) then
 
-                write(*,'(i10,6es13.3,a,i6,es12.1,i10.2,a,i2.2)') i_iteration, res_norm(:), & 
+                write(*,'(i10,6es13.3,a,i6,es12.1,i10.2,a,i2.2,es13.3)') i_iteration, res_norm(:), & 
                                                   maxval(res_norm(:)/res_norm_initial(:)), &
-                                                  "   | ", lrelax_sweeps_actual, lrelax_roc, minutes, ":", seconds
+                                                  "   | ", lrelax_sweeps_actual, lrelax_roc, minutes, ":", seconds, CFL
             else
-                write(*,'(i10,6es13.3)') i_iteration, res_norm(:), maxval(res_norm(:)/res_norm_initial(:))
+                write(*,'(i10,6es13.3,i10.2,a,i2.2,es13.3)') i_iteration, res_norm(:), maxval(res_norm(:)/res_norm_initial(:)), &
+                                                      minutes, ":", seconds, CFL
             end if
 
             if (maxval(res_norm(:)/res_norm_initial(:)) < solver_tolerance) then
@@ -124,6 +150,12 @@ contains
                 write(*,*) " Unsopported iteration method: Solver = ", solver_type
             end if
 
+            if (CFL_ramp .and. (i_iteration < CFL_steps + CFL_start_iter) .and. i_iteration > CFL_start_iter) then
+                CFL_running_mult = CFL_running_mult * CFL_multiplier
+                CFL = CFL_start * CFL_running_mult
+            elseif (CFL_ramp .and. (i_iteration == CFL_steps + CFL_start_iter)) then
+                CFL = CFL_end
+            end if
 
         end do solver_loop
     
@@ -153,10 +185,15 @@ contains
             u(:,i) = half*(u(:,i) + u0(:,i)) - half * (dtau(i)/cell(i)%vol) * res(:,i) ! u*
             w(:,i) = u2w(u(:,i))
         end do
+        ! write(*,*) maxval(u(1,:)), maxval(u(2,:)),maxval(u(3,:)),maxval(u(4,:)),maxval(u(5,:))
+        ! write(*,*)
+
     end subroutine explicit_pseudo_time_rk
 
     subroutine implicit
         use module_jacobian        , only : compute_jacobian
+        use module_input_parameter , only : jacobian_method
+        use module_numerical_jacobian, only:compute_numerical_jacobian
         use module_common_data     , only : p2, du
         use module_ccfv_data_grid  , only : ncells
         use module_ccfv_data_soln  , only : u, w, u2w
@@ -164,8 +201,16 @@ contains
         implicit none
         integer         :: i
         real(p2)        :: omegan !under-relaxation factor for nonlinear iteration
+        
         ! Compute the residual Jacobian
-        call compute_jacobian
+        if (trim(jacobian_method) == "analytical") then
+            call compute_jacobian
+        else if (trim(jacobian_method) == "numerical") then
+            call compute_numerical_jacobian
+        else
+            write(*,*) "unsupported jacobian method. Stop!"
+            stop
+        end if
 
         ! Compute du by relaxing the linear system
         call linear_relaxation
@@ -216,7 +261,7 @@ contains
     end subroutine compute_residual_norm
     !********************************************************************************
     subroutine compute_local_time_step_dtau
-        use module_common_data      , only : half
+        use module_common_data      , only : half, p2
         use module_ccfv_data_grid   , only : ncells, cell
         use module_ccfv_data_soln   , only : dtau, wsn
         use module_input_parameter  , only : CFL
@@ -224,9 +269,11 @@ contains
         implicit none
 
         integer :: i
+        ! real(p2), dimension(ncells) :: viscous_dtau
 
         cell_loop : do i = 1,ncells
             dtau(i) = CFL * cell(i)%vol/( half * wsn(i) )
+
         end do cell_loop
     end subroutine compute_local_time_step_dtau
 !********************************************************************************

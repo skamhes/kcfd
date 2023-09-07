@@ -23,6 +23,8 @@ module module_common_data
     real(p2), parameter :: my_eps = epsilon(one)  !Machine zero w.r.t. 1.0.
     real(p2), parameter :: pi = 3.141592653589793238_p2
     integer             :: ix = 1, iy = 2, iz = 3
+    real(p2), parameter, dimension(5,5) :: canonical_array = reshape( (/1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0, 0,0,0,0,1/), &
+                                                                        (/5,5/))
 
     !--------------------------------------------------------------------
     !--------------------------------------------------------------------

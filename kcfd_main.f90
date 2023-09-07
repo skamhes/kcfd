@@ -130,6 +130,9 @@
 
     ! call read_nml_input_parameters("input.nml")
     call read_nml_input_parameters("airfoil_input.nml")
+    ! call read_nml_input_parameters("ellipse_input.nml")
+    ! call read_nml_input_parameters("1D_shock.nml")
+    ! call read_nml_input_parameters("flat_plate.nml")
     ! call read_nml_input_parameters("input_om6.nml")
     ! call read_nml_input_parameters("input_bump.nml")
     !-------------------------------------------------------------------------------

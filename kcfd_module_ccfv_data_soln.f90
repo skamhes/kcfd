@@ -28,9 +28,11 @@ module module_ccfv_data_soln
     real(p2), dimension(:,:)  , pointer :: w     !primitive variables at cells/nodes.
     real(p2), dimension(:,:,:), pointer :: gradw !gradients of w at cells/nodes.
     real(p2), dimension(:), allocatable :: Temp  ! Temperature (only used for Navier stokes EQ)
-
+    real(p2), dimension(:), allocatable :: mu    ! Viscosity
+    real(p2), dimension(:,:), allocatable :: gradT ! gradient of temperature
     real(p2), dimension(:)    , pointer :: dtau  !pseudo time step
     real(p2), dimension(:)    , pointer :: wsn   !maximum eigenvalue at faces
+    real(p2), dimension(:,:,:), allocatable :: tau ! Viscous stress tensor
 
     !Just for convenience and clarity in acecssing variables in w or residual components.
     integer                           :: ir = 1  !w(ir) = density
@@ -85,8 +87,11 @@ contains
 
         allocate( u(nq,ncells) )
         allocate( w(nq,ncells) )
-        if (navier_stokes) allocate( Temp(ncells) )
-
+        if (navier_stokes) allocate(    Temp(ncells) )
+        if (navier_stokes) allocate(      mu(ncells) )
+        ! if (navier_stokes) allocate( tau(3,3,ncells) )
+        ! tau = zero ! Initial shear will be zero
+        
         ! Initialization
         u = zero
         w = zero
@@ -111,9 +116,10 @@ contains
         ! Initialize gradient arrays (just zero here).
 
         allocate( gradw(3,nq,ncells) )
-
+        if (navier_stokes) allocate( gradT(3,ncells) )
         ! Initialization
             gradw = zero
+            if (navier_stokes) gradT = zero
 
         !------------------------------------------------------
         ! Allocate residual array
@@ -128,12 +134,12 @@ contains
     subroutine set_initial_solution
         use module_common_data    , only : p2, one, pi
         use module_ccfv_data_grid , only : ncells
-        use module_input_parameter, only : M_inf, aoa, sideslip, perturb_initial, navier_stokes, R
+        use module_input_parameter, only : M_inf, aoa, sideslip, perturb_initial, navier_stokes, R,C_0,Freestream_Temp,Reynolds
         implicit none
         
         integer                :: i
         real(p2), dimension(5) :: w_initial
-        real(p2)               :: T_initial
+        real(p2)               :: T_initial, mu_initial
         
 
         !Set free stream values based on the input Mach number.
@@ -150,10 +156,13 @@ contains
         w_initial(iw) =   w_inf
         w_initial(ip) =   p_inf
 
-        T_initial = p_inf/(rho_inf*R)
+        T_initial = one ! T* = p*(gamma)/rho*. I do Like CFD Eq. 4.14.20
+        mu_initial = (M_inf/Reynolds) * ((one + (C_0/Freestream_Temp))/(T_initial + (C_0/Freestream_Temp))) * (one) ** 1.5_p2
+        
+        ! Scaled Nondimensionalized mu.
         if (perturb_initial) then
-            w_initial(iu) = 0.6
-            w_initial(iv)= 0.6
+            w_initial(iu) = 0.2_p2
+            ! w_initial(iv)= 0.0
             !w_inf = 0.2
         end if                
         !Set initial solution by the free stream values
@@ -163,7 +172,10 @@ contains
             
             !Compute and store conservative variables.
             u(:,i) = w2u( w_initial )
-            if (navier_stokes) Temp(i) = T_initial
+            if (navier_stokes) then 
+                Temp(i) =  T_initial
+                mu(i)   = mu_initial
+            end if
         end do cell_loop
 
     end subroutine set_initial_solution

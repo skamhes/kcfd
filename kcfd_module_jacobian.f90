@@ -2,25 +2,30 @@ module module_jacobian
     implicit none
     
     public :: compute_jacobian ! compute the jacobian
-    public :: gewp_solve       ! Gauss elimination for inverting diagonal blocks
+    !public :: gewp_solve       ! Gauss elimination for inverting diagonal blocks
 contains
     
     subroutine compute_jacobian
         
         use module_common_data          , only : p2, zero, nb, bc_type
-        use module_flux_jac_interface   , only : interface_jac
+        use module_flux_jac_interface   , only : interface_jac, interface_jac_visc, interface_viscous_alpha_jacobian
         use module_ccfv_data_grid       , only : nfaces, face, ncells, cell, face_nrml, face_nrml_mag, jac, &
                                                  kth_nghbr_of_1, kth_nghbr_of_2, bound
-        use module_ccfv_data_soln       , only : w, u, u2w, dtau
-        use module_bc_states            , only : get_right_state
+        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw
+        use module_bc_states            , only : get_right_state, get_viscous_right_state
+        use module_gewp                 , only : gewp_solve
+        use module_input_parameter      , only : navier_stokes
         
         implicit none
         ! Local Vars
         integer                     :: c1, c2, i, k, ib, idestat, j
-        real(p2), dimension(3)      :: unit_face_nrml, bface_centroid
-        real(p2), dimension(5)      :: u1, ub, wb
+        real(p2), dimension(3)      :: unit_face_nrml, bface_centroid, ds, d_Cb, ejk
+        real(p2), dimension(5)      :: u1, u2, ub, wb
+        real(p2), dimension(3,5)    :: gradw1, gradw2, gradwb
         real(p2), dimension(5,5)    :: dFnduL, dFnduR
-        real(p2)                    :: face_mag
+        real(p2)                    :: face_mag, mag_ds, mag_ejk
+        real(p2)                    :: xc1,xc2,yc1,yc2,zc1,zc2
+        
         ! Initialize jacobian terms
         do i = 1,ncells
             jac(i)%diag = zero
@@ -49,6 +54,59 @@ contains
             k = kth_nghbr_of_2(i)
             jac(c2)%off_diag(:,:,k) = jac(c2)%off_diag(:,:,k) - dFnduL * face_mag
             
+            if (.not. navier_stokes) then
+                cycle
+            else
+                ! ! Calculate the face gradients
+                ! xc1 = cell(c1)%xc
+                ! yc1 = cell(c1)%yc
+                ! zc1 = cell(c1)%zc
+                ! xc2 = cell(c2)%xc
+                ! yc2 = cell(c2)%yc
+                ! zc2 = cell(c2)%zc
+                ! delta_s = (/xc2-xc1, yc2-yc1, zc2-zc1/) ! vector pointing from center of cell 1 to cell 2
+
+                ! call interface_jac_visc(w(:,c1),w(:,c2),Temp(c1),Temp(c2),mu(c1),mu(c2),gradw(:,2:4,c1),gradw(:,2:4,c2), &
+                !                         unit_face_nrml,delta_s,dFnduL,dFnduR)
+
+                ! ! Add to diagonal term of C1
+                ! jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
+                ! ! get neighbor index k for cell c1
+                ! k = kth_nghbr_of_1(i)
+                ! ! add to off diagonal neighbor k for cell c1
+                ! jac(c1)%off_diag(:,:,k) = jac(c1)%off_diag(:,:,k) + dFnduR * face_mag
+
+                ! ! Subtract terms from c2
+                ! jac(c2)%diag            = jac(c2)%diag            - dFnduR * face_mag
+                ! k = kth_nghbr_of_2(i)
+                ! jac(c2)%off_diag(:,:,k) = jac(c2)%off_diag(:,:,k) - dFnduL * face_mag
+                u1      = u(:,c1)
+                u2      = u(:,c2)
+
+                gradw1  = gradw(:,:,c1)
+                gradw2  = gradw(:,:,c2)
+
+                ds      = (/cell(c2)%xc - cell(c1)%xc,cell(c2)%yc-cell(c1)%yc,cell(c2)%zc-cell(c1)%zc/)
+                mag_ds   = sqrt(ds(1)**2 + ds(2)**2 + ds(3)**2)
+                ds      = ds/mag_ds
+
+                call interface_viscous_alpha_jacobian(u1,u2,gradw1,gradw2,unit_face_nrml,ds,mag_ds,dFnduL,dFnduR)
+
+                ! Add to diagonal term of C1
+                jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
+                ! get neighbor index k for cell c1
+                k = kth_nghbr_of_1(i)
+                ! add to off diagonal neighbor k for cell c1
+                jac(c1)%off_diag(:,:,k) = jac(c1)%off_diag(:,:,k) + dFnduR * face_mag
+
+                ! Subtract terms from c2
+                jac(c2)%diag            = jac(c2)%diag            - dFnduR * face_mag
+                k = kth_nghbr_of_2(i)
+                jac(c2)%off_diag(:,:,k) = jac(c2)%off_diag(:,:,k) - dFnduL * face_mag
+
+            end if
+
+
         end do
         
         ! Now we gotta do the boundary faces
@@ -65,6 +123,21 @@ contains
                 call interface_jac( w(:,c1), wb, unit_face_nrml, dFnduL, dFnduR)
                 ! We only have a diagonal term to add
                 jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
+
+                if (.not. navier_stokes) then
+                    cycle
+                else
+
+                    d_Cb = (/bface_centroid(1) - cell(c1)%xc,bface_centroid(2) - cell(c1)%yc,bface_centroid(3) - cell(c1)%zc/)
+                    ejk = 2*d_Cb
+                    mag_ejk = sqrt( ejk(1)**2 + ejk(2)**2 + ejk(3)**2 )
+                    ejk = ejk/mag_ejk
+
+                    call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
+                                                 u1,gradw1,unit_face_nrml,bc_type(ib),ub,gradwb)
+
+                    call interface_viscous_alpha_jacobian(u1,ub,gradw1,gradwb,unit_face_nrml,ejk,mag_ejk,dFnduL,dFnduR)
+                end if
             end do bfaces_loop
         end do bound_loop
 
@@ -101,237 +174,5 @@ contains
     end subroutine compute_jacobian
 
 
-
-    !****************************************************************************
-    !* ------------------ GAUSS ELIMINATION WITH PIVOTING ---------------------
-    !*
-    !*  This computes the inverse of an (nm)x(nm) matrix "ai" and also
-    !*  computes the solution to a given lienar system.
-    !*
-    !*  IN :       ai = An (nm)x(nm) matrix whoise inverse is sought.
-    !*             bi = A vector of (nm): Right hand side of the linear sytem
-    !*             nm = The size of the matrix "ai"
-    !*
-    !* OUT :
-    !*            sol = Solution to the linear system: ai*sol=bi
-    !*        inverse = the inverse of "ai".
-    !*       idetstat = 0 -> inverse successfully computed
-    !*                  1 -> THE INVERSE DOES NOT EXIST (det=0).
-    !*                  2 -> No unique solutions exist.
-    !*****************************************************************************
-    subroutine gewp_solve(ai,nm, inverse,idetstat)
-
-        implicit none
-      
-        integer , parameter ::    p2 = selected_real_kind(15) ! Double precision
-        real(p2), parameter ::  zero = 0.0_p2
-        real(p2), parameter ::   one = 1.0_p2
-      
-        integer ,                   intent( in) :: nm
-        real(p2), dimension(nm,nm), intent( in) :: ai
-      
-        real(p2), dimension(nm,nm), intent(out) :: inverse
-        integer ,                   intent(out) :: idetstat
-      
-        real(p2), dimension(nm,nm+1) :: a
-        real(p2), dimension(nm)      :: x
-        integer , dimension(nm)      :: nrow
-        integer                      :: I,J,K,pp,m
-      
-        do m = 1, nm
-            !*****************************************************************************
-            !* Set up the matrix a
-            !*****************************************************************************
-            
-            do J=1,nm
-                do I=1,nm
-                a(I,J) = ai(I,J)
-                end do
-            end do
-        
-            do k=1,nm
-                a(k,nm+1)=zero; nrow(k)=k
-            end do
-            a(m,nm+1)=one
-        
-            !*****************************************************************************
-            !* HONA IKOKA..... 
-            !*****************************************************************************
-            do j=1,nm-1
-            !*****************************************************************************
-            !* FIND SMALLEST pp FOR a(pp,j) IS MAXIMUM IN JTH COLUMN.
-            !***************************************************************************** 
-                call findmax(nm,j,pp,a,nrow)
-                !*****************************************************************************
-                !* IF a(nrow(p),j) IS zero, THERE'S NO UNIQUE SOLUTIONS      
-                !*****************************************************************************
-                if (abs(a(nrow(pp),j)) < epsilon(one)) then
-                    write(6,*) 'THE INVERSE DOES NOT EXIST.'
-                    idetstat = 1
-                    return
-                endif
-                !*****************************************************************************
-                !* IF THE MAX IS NOT A DIAGONAL ELEMENT, SWITCH THOSE ROWS       
-                !*****************************************************************************
-                if (nrow(pp) .ne. nrow(j)) then
-                    call switch(nm,j,pp,nrow)
-                else
-                endif  
-                !*****************************************************************************
-                !* ELIMINATE ALL THE ENTRIES BELOW THE DIAGONAL ONE
-                !***************************************************************************** 
-                call eliminate_below(nm,j,a,nrow)
-        
-            end do
-            !*****************************************************************************
-            !* CHECK IF a(nrow(N),N)=0.0 .
-            !*****************************************************************************
-            if (abs(a(nrow(nm),nm)) < epsilon(one)) then
-                write(6,*) 'NO UNIQUE SOLUTION EXISTS!'
-                idetstat = 2
-                return
-            else
-            endif
-            !*****************************************************************************
-            !* BACKSUBSTITUTION!
-            !*****************************************************************************
-            call backsub(nm,x,a,nrow)
-            !*****************************************************************************
-            !* STORE THE SOLUTIONS, YOU KNOW THEY ARE INVERSE(i,m) i=1...
-            !*****************************************************************************
-            do i=1,nm
-                inverse(i,m)=x(i)
-            end do
-            !*****************************************************************************
-        end do
-      
-        idetstat = 0
-      
-        return
-      
-        !*****************************************************************************
-    end subroutine gewp_solve
-      
-      !*****************************************************************************
-      !* Four subroutines below are used in gewp_solve() above.
-      !*****************************************************************************
-      !* FIND MAXIMUM ELEMENT IN jth COLUMN 
-      !***************************************************************************** 
-            subroutine findmax(nm,j,pp,a,nrow)
-      
-            implicit none
-      
-            integer , parameter   :: p2 = selected_real_kind(15) ! Double precision
-            integer , intent( in) :: nm
-            real(p2), intent( in) :: a(nm,nm+1)
-            integer , intent( in) :: j,nrow(nm)
-            integer , intent(out) :: pp
-            real(p2)              :: max
-            integer               :: i
-      
-                  max=abs(a(nrow(j),j)); pp=j
-      
-                 do i=j+1,nm
-      
-                   if (max < abs(a(nrow(i),j))) then
-      
-                        pp=i; max=abs(a(nrow(i),j))
-      
-                   endif
-      
-                 end do
-      
-            return
-      
-            end subroutine findmax
-      !*****************************************************************************
-      !* SWITCH THOSE ROWS       
-      !*****************************************************************************
-            subroutine switch(nm,j,pp,nrow)
-      
-            implicit none
-      
-            integer, intent(   in) :: nm,j,pp
-            integer, intent(inout) :: nrow(nm)
-            integer                :: ncopy
-      
-            if (nrow(pp).ne.nrow(j)) then
-      
-               ncopy=nrow(j)
-               nrow(j)=nrow(pp)
-               nrow(pp)=ncopy
-      
-            endif
-      
-            return
-      
-            end subroutine switch
-      !*****************************************************************************
-      !* ELIMINATE ALL THE ENTRIES BELOW THE DIAGONAL ONE
-      !*(Give me j, the column you are working on now)
-      !***************************************************************************** 
-            subroutine eliminate_below(nm,j,a,nrow)
-      
-            implicit none
-      
-            integer , parameter     :: p2 = selected_real_kind(15) ! Double precision
-            real(p2), parameter     :: zero = 0.0_p2
-            integer , intent(   in) :: nm
-            real(p2), intent(inout) :: a(nm,nm+1)
-            integer , intent(   in) :: j,nrow(nm)
-            real(p2)                :: m
-            integer                 :: k,i
-      
-            do i=j+1,nm
-      
-              m=a(nrow(i),j)/a(nrow(j),j)
-              a(nrow(i),j)=zero
-      
-                do k=j+1,nm+1
-                  a(nrow(i),k)=a(nrow(i),k)-m*a(nrow(j),k)
-                end do
-      
-            end do
-      
-            return
-      
-            end subroutine eliminate_below
-      !*****************************************************************************
-      !* BACKSUBSTITUTION!
-      !*****************************************************************************
-            subroutine backsub(nm,x,a,nrow)
-      
-            implicit none
-      
-            integer , parameter   :: p2 = selected_real_kind(15) ! Double precision
-            real(p2), parameter   :: zero = 0.0_p2
-      
-            integer , intent( in) :: nm
-            real(p2), intent( in) :: a(nm,nm+1)
-            integer , intent( in) :: nrow(nm)
-            real(p2), intent(out) :: x(nm)
-            real(p2)              :: sum
-            integer               :: i,k
-      
-            x(nm)=a(nrow(nm),nm+1)/a(nrow(nm),nm)
-      
-            do i=nm-1,1,-1
-      
-               sum=zero
-      
-                 do k=i+1,nm
-      
-                    sum=sum+a(nrow(i),k)*x(k)
-      
-                 end do
-      
-            x(i)=(a(nrow(i),nm+1)-sum)/a(nrow(i),i)
-      
-            end do
-      
-            return
-      
-            end subroutine backsub
-      !*********************************************************************
       
 end module module_jacobian

@@ -14,9 +14,9 @@ module module_write_files
             use module_common_data, only : filename_tecplot_b
             !To access the solution data.
             use module_ccfv_data_grid, only : cell, ncells, bound, bound_export
-            use module_ccfv_data_soln, only : w, ir, iu, iv, iw, ip
+            use module_ccfv_data_soln, only : w, ir, iu, iv, iw, ip, Temp, mu
 
-            use module_input_parameter       , only : project_name
+            use module_input_parameter       , only : project_name, navier_stokes
             use module_ccfv_gradient         , only : my_alloc_int_ptr
             
             implicit none 
@@ -29,26 +29,41 @@ module module_write_files
             integer                           :: j, k, ib, bcell_i, candidate_node, nk, j_count
             real(p2), dimension(:,:), pointer :: wn
             integer , dimension(:  ), pointer :: nc
+            real(p2), dimension(:  ), allocatable :: tn, mun, Mn
             type(bnode_type), dimension(nb)   :: bnode_data
             logical                           :: already_added
 
-            allocate(wn(5,nnodes))
-            allocate(nc(  nnodes))
-
+            allocate(wn(5, nnodes))
+            allocate(nc(   nnodes))
+            if (navier_stokes) allocate(tn(   nnodes))
+            if (navier_stokes) allocate(mun(  nnodes))
+            allocate(mn(   nnodes))
+            
             nc = 0
             wn = zero
+            if (navier_stokes) tn = zero
+            if (navier_stokes) mun = zero
 
             bound_loop : do ib = 1,nb
                 bface_loop : do i = 1,bound(ib)%nbfaces
                     bcell_i = bound(ib)%bcell(i)
                     do k = 1,cell(bcell_i)%nvtx
                         wn(:,cell(bcell_i)%vtx(k)) = wn(:,cell(bcell_i)%vtx(k))  + w(:,bcell_i)
+                        if (navier_stokes) then
+                            tn(  cell(bcell_i)%vtx(k)) = tn(  cell(bcell_i)%vtx(k))  + temp(bcell_i)
+                            mun(  cell(bcell_i)%vtx(k)) = mun(  cell(bcell_i)%vtx(k))  + mu(bcell_i)
+                        end if
                         nc(cell(bcell_i)%vtx(k))   = nc(cell(bcell_i)%vtx(k)) + 1
                     end do
                 end do bface_loop
             end do bound_loop
             do j = 1,nnodes
                 wn(:,j) = wn(:,j) / nc(j) ! copmute an average
+                if (navier_stokes) then
+                    tn(j) = tn(j) / nc(j)
+                    mun(j) = mun(j) / nc(j)
+                end if
+                Mn(j) = sqrt(wn(2,j)**2 + wn(3,j)**2 + wn(4,j)**2) ! mach number
             end do
 
             allocate(bound_export(nb))
@@ -100,14 +115,22 @@ module module_write_files
             !(0)Header information
 
             write(8,*) 'TITLE = "GRID"'
-            write(8,*) 'VARIABLES = "x","y","z","rho","u","v","w","p"'
+            if (navier_stokes) then
+                write(8,*) 'VARIABLES = "x","y","z","rho","u","v","w","p","T","mu","M"'
+            else
+                write(8,*) 'VARIABLES = "x","y","z","rho","u","v","w","p","M"'
+            end if
             ! (1) Nodal Information
             do ib = 1,nb
                 write(8,*) 'ZONE T = "',ib,'"  n=', bnode_data(ib)%nbnodes, &
                                 ',e=', bound(ib)%nbfaces,' , zonetype=fequadrilateral, datapacking=point'
                 do j_count = 1,bnode_data(ib)%nbnodes
                     j = bnode_data(ib)%bnodes(j_count)
-                    write(8,'(10es25.15)') x(j), y(j), z(j), wn(ir,j), wn(iu,j), wn(iv,j), wn(iw,j), wn(ip,j)
+                    if (navier_stokes) then
+                        write(8,'(11es25.15)') x(j), y(j), z(j), wn(ir,j), wn(iu,j), wn(iv,j), wn(iw,j), wn(ip,j),tn(j),mun(j),Mn(j)
+                    else 
+                        write(8,'(11es25.15)') x(j), y(j), z(j), wn(ir,j), wn(iu,j), wn(iv,j), wn(iw,j), wn(ip,j), Mn(j)
+                    end if
                 end do
                 ! Loop through faces
                 do i = 1,bound_export(ib)%nbfaces

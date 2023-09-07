@@ -7,7 +7,10 @@ module module_ccfv_gradient
     public :: compute_lsq_coefficients
     public :: construct_vertex_stencil
     public :: compute_gradient
+    public :: compute_temperature_gradient
     public :: my_alloc_int_ptr
+    public :: perturbation_gradient
+    public :: perturbation_gradient_boundary
 
     !------------------------------------------------------------------------------------
     !------------------------------------------------------------------------------------
@@ -45,7 +48,7 @@ contains
     
 
     subroutine compute_gradient
-        use module_common_data   , only : zero
+        use module_common_data   , only : zero, p2
         use module_ccfv_data_grid, only : ncells
         use module_ccfv_data_soln, only : gradw, w
         
@@ -71,6 +74,154 @@ contains
         
         ! compute the gradient for each of the primitive variables
     end subroutine compute_gradient
+
+    subroutine perturbation_gradient(gradw_orig1,gradw_orig2,ivar,ci,ck,u_perturb,grad_perturb1,grad_perturb2)
+        use module_common_data , only : zero, p2
+        use module_ccfv_data_soln, only : w, u2w
+
+        implicit none
+        real(p2), dimension(3,5), intent(in)    :: gradw_orig1,gradw_orig2          ! Original input gradient
+        integer                 , intent(in)    :: ivar                             ! Variable that is being perturbed
+        integer,                  intent(in)    :: ci,ck                            ! Cell that is being perturbed
+        real(p2), dimension(5),   intent(in)    :: u_perturb
+        real(p2), dimension(3,5), intent(out)   :: grad_perturb1,grad_perturb2      ! Resultant perturbed gradient
+
+        ! Local vars
+        real(p2), dimension(5) :: w_perturb
+        real(p2) :: wi, wk
+        integer  :: i,k,nghbr_cell
+
+        grad_perturb1 = gradw_orig1
+        grad_perturb1(:,ivar) = zero
+        grad_perturb2 = gradw_orig2
+        grad_perturb2(:,ivar) = zero
+
+        w_perturb = u2w(u_perturb)
+        ! Update gradient at cell i
+        wi = w_perturb(ivar)
+        nghbr_loop : do k = 1,cclsq(ci)%nnghbrs_lsq
+            nghbr_cell = cclsq(ci)%nghbr_lsq(k)
+            wk = w(ivar,nghbr_cell)
+            grad_perturb1(1,ivar) = grad_perturb1(1,ivar) + cclsq(ci)%cx(k)*(wk-wi)
+            grad_perturb1(2,ivar) = grad_perturb1(2,ivar) + cclsq(ci)%cy(k)*(wk-wi)
+            grad_perturb1(3,ivar) = grad_perturb1(3,ivar) + cclsq(ci)%cz(k)*(wk-wi)
+            !local_gradw = gradw
+        end do nghbr_loop
+
+        ! update gradient at cell k
+        wi = w(ivar,ck)
+        nghbr_loopk : do k = 1,cclsq(ck)%nnghbrs_lsq
+            nghbr_cell = cclsq(ck)%nghbr_lsq(k)
+            if (nghbr_cell == ci) then
+                wk = w_perturb(ivar)
+            else
+                wk = w(ivar,nghbr_cell)
+            end if
+            grad_perturb2(1,ivar) = grad_perturb2(1,ivar) + cclsq(ck)%cx(k)*(wk-wi)
+            grad_perturb2(2,ivar) = grad_perturb2(2,ivar) + cclsq(ck)%cy(k)*(wk-wi)
+            grad_perturb2(3,ivar) = grad_perturb2(3,ivar) + cclsq(ck)%cz(k)*(wk-wi)
+            !local_gradw = gradw
+        end do nghbr_loopk
+
+    end subroutine perturbation_gradient
+
+    subroutine perturbation_gradient_boundary(gradw_orig1,ivar,ci,u_perturb,grad_perturb1)
+        use module_common_data , only : zero, p2
+        use module_ccfv_data_soln, only : w, u2w
+
+        implicit none
+        real(p2), dimension(3,5), intent(in)    :: gradw_orig1          ! Original input gradient
+        integer                 , intent(in)    :: ivar                             ! Variable that is being perturbed
+        integer,                  intent(in)    :: ci                            ! Cell that is being perturbed
+        real(p2), dimension(5),   intent(in)    :: u_perturb
+        real(p2), dimension(3,5), intent(out)   :: grad_perturb1      ! Resultant perturbed gradient
+
+        ! Local vars
+        real(p2), dimension(5) :: w_perturb
+        real(p2) :: wi, wk
+        integer  :: i,k,nghbr_cell
+
+        grad_perturb1 = gradw_orig1
+        grad_perturb1(:,ivar) = zero
+
+
+        w_perturb = u2w(u_perturb)
+        ! Update gradient at cell i
+        wi = w_perturb(ivar)
+        nghbr_loop : do k = 1,cclsq(ci)%nnghbrs_lsq
+            nghbr_cell = cclsq(ci)%nghbr_lsq(k)
+            wk = w(ivar,nghbr_cell)
+            grad_perturb1(1,ivar) = grad_perturb1(1,ivar) + cclsq(ci)%cx(k)*(wk-wi)
+            grad_perturb1(2,ivar) = grad_perturb1(2,ivar) + cclsq(ci)%cy(k)*(wk-wi)
+            grad_perturb1(3,ivar) = grad_perturb1(3,ivar) + cclsq(ci)%cz(k)*(wk-wi)
+
+        end do nghbr_loop
+
+        
+    end subroutine perturbation_gradient_boundary
+
+    subroutine perturb_temperature_gradient(gradT_orig1,gradT_orig2,ci,ck,T_perturb,grad_perturb1,grad_perturb2)
+        use module_common_data, only : p2
+        use module_ccfv_data_grid, only : ncells
+        use module_ccfv_data_soln, only : w, Temp, gamma
+        implicit none
+        real(p2), dimension(3), intent(in)      :: gradT_orig1,gradT_orig2
+        integer,                intent(in)      :: ci, ck
+        real(p2),               intent(in)      :: T_perturb
+        real(p2), dimension(3), INTENT(OUT)     :: grad_perturb1,grad_perturb2
+
+        integer :: i, nghbr_cell, k
+        real(p2) :: Ti, Tk
+    
+        ! Now we use the least squares stuff to calculate the gradient
+        grad_perturb1 = zero
+        
+        nghbr_loop : do k = 1,cclsq(ci)%nnghbrs_lsq
+            nghbr_cell = cclsq(ci)%nghbr_lsq(k)
+            grad_perturb1(1) = grad_perturb1(1) + cclsq(i)%cx(k)*(Temp(k) - T_perturb)
+            grad_perturb1(2) = grad_perturb1(2) + cclsq(i)%cy(k)*(Temp(k) - T_perturb)
+            grad_perturb1(3) = grad_perturb1(3) + cclsq(i)%cz(k)*(Temp(k) - T_perturb)
+        end do nghbr_loop
+        
+        ! update gradient at cell k
+        Ti = Temp(ck)
+        nghbr_loopk : do k = 1,cclsq(ck)%nnghbrs_lsq
+            nghbr_cell = cclsq(ck)%nghbr_lsq(k)
+            if (nghbr_cell == ci) then
+                Tk = T_perturb
+            else
+                Tk = Temp(nghbr_cell)
+            end if
+            grad_perturb2(1) = grad_perturb2(1) + cclsq(ck)%cx(k)*(Tk-Ti)
+            grad_perturb2(2) = grad_perturb2(2) + cclsq(ck)%cy(k)*(Tk-Ti)
+            grad_perturb2(3) = grad_perturb2(3) + cclsq(ck)%cz(k)*(Tk-Ti)
+            !local_gradw = gradw
+        end do nghbr_loopk
+    end subroutine perturb_temperature_gradient
+
+    subroutine compute_temperature_gradient
+        use module_common_data, only : p2
+        use module_ccfv_data_grid, only : ncells
+        use module_ccfv_data_soln, only : w, Temp, gamma, gradT
+        implicit none
+        integer :: i, nghbr_cell, k
+    
+        ! First we need to compute T
+        do i = 1,ncells
+            Temp(i) = w(5,i)*gamma / w(1,i)
+        end do
+
+        ! Now we use the least squares stuff to calculate the gradient
+        gradT = zero
+        cell_loop : do i = 1,ncells
+            nghbr_loop : do k = 1,cclsq(i)%nnghbrs_lsq
+                nghbr_cell = cclsq(i)%nghbr_lsq(k)
+                gradT(1,i) = gradT(1,i) + cclsq(i)%cx(k)*(Temp(k) - Temp(i))
+                gradT(2,i) = gradT(2,i) + cclsq(i)%cy(k)*(Temp(k) - Temp(i))
+                gradT(3,i) = gradT(3,i) + cclsq(i)%cz(k)*(Temp(k) - Temp(i))
+            end do nghbr_loop
+        end do cell_loop
+    end subroutine compute_temperature_gradient
 
     subroutine construct_vertex_stencil
         use module_common_data   , only : nnodes

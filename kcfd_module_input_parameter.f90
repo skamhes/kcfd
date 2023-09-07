@@ -26,11 +26,16 @@ module module_input_parameter
   
   ! Scheme/solver parameters
     real(p2)               :: CFL                    = 0.5_p2
+    logical                :: CFL_ramp               = .false.
+    real(p2)               :: CFL_start              = 0.1_p2
+    integer                :: CFL_start_iter         = 10
+    integer                :: CFL_steps              = 100
     integer                :: solver_max_itr         = 1000
     real(p2)               :: solver_tolerance       = 1.0e-05_p2
     character(80)          :: inviscid_flux          = "roe"
     character(80)          :: inviscid_jac           = "roe"
     character(80)          :: solver_type            = "rk"
+    character(80)          :: jacobian_method        = "analytical"
     real(p2), dimension(5) :: eig_limiting_factor    = (/ 0.1, 0.1, 0.1, 0.1, 0.1 /)  !eigenvalue limiting factor
     real(p2), dimension(5) :: variable_ur            = (/ 1, 1, 1, 1, 1 /)  ! Variable under relaxation factors (only used in 
     ! implicit) computations
@@ -51,6 +56,10 @@ module module_input_parameter
     ! Navier-Stokes Info
     logical :: navier_stokes = .false.
     real(p2) :: R = 287.058 ! ideal gas constant for air
+    real(p2) :: Freestream_Temp = 293.15 ! degK Sea level room temp
+    real(p2) :: Pr = 0.72 ! Prandtl number for sea-level air
+    real(p2) :: Reynolds = 1.6e6 ! Freestream Reynolds number
+    real(p2) :: C_0 = 110.5 ! degK Sutherland's constant (or something like that...) for air
   
   ! End of Default input values
   !-------------------------------------------------------------------------
@@ -86,7 +95,14 @@ module module_input_parameter
     use_amg              , &
     max_amg_levels       , &
     navier_stokes        , &
-    R
+    R                    , &
+    Reynolds             , &
+    Freestream_Temp      , &
+    CFL_ramp             , &
+    CFL_start            , &
+    CFL_start_iter       , &
+    CFL_steps            , &
+    jacobian_method
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)

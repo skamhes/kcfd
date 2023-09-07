@@ -285,7 +285,7 @@ contains
         ! Implementation of algebraic multi grid using additive correction.
         use module_common_data   , only : p2, zero, amg_direction
         use module_ccfv_data_grid, only : cc_data_type, jacobian_type, test, jac
-        use module_jacobian      , only : gewp_solve
+        use module_gewp          , only : gewp_solve
         use module_sparse_matrix , only : R_A_P
         !use stdlib_sorting, only : sort
         
