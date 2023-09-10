@@ -13,7 +13,7 @@ contains
                     bound, face_nrml, face_nrml_mag, face_centroid
        
         use module_ccfv_data_soln  , only : res, u, gradw, wsn, gradT, mu, w, gamma, u2w, Temp
-        use module_input_parameter , only : Pr, Freestream_Temp ! Prandtl number
+        use module_input_parameter , only : Pr, Freestream_Temp, visc_flux_method ! Prandtl number
         use module_flux            , only : interface_flux, compute_viscosity, compute_tau, viscous_flux, viscous_bflux, &
                                             viscous_alpha
         use module_bc_states       , only : get_right_state, get_viscous_right_state
@@ -148,65 +148,23 @@ contains
             wsn(c2)   = wsn(c2) + wave_speed*face_nrml_mag(i)
             
             if (.not. navier_stokes) cycle
-
-            ! ---------------------------------------------------------------
-            ! Viscous Flux Terms
-            ! ---------------------------------------------------------------
-
-            ! ! Calculate the face gradients
-            ! xc1 = cell(c1)%xc
-            ! yc1 = cell(c1)%yc
-            ! zc1 = cell(c1)%zc
-            ! xc2 = cell(c2)%xc
-            ! yc2 = cell(c2)%yc
-            ! zc2 = cell(c2)%zc
-            ! ds = (/xc2-xc1, yc2-yc1, zc2-zc1/) ! vector pointing from center of cell 1 to cell 2
-            ! dsds2 = ds/(ds(1)**2 + ds(2)**2 + ds(3)**2) ! ds/ds^2
-            ! do iu = 1,3
-            !     delU = half * (gradw(:,iu+1,c1) + gradw(:,iu+1,c2))
-            !     face_gradw(iu,:) = delU + ((w(iu+1,c2) - w(iu+1,c1)) - dot_product(delU,ds) ) * dsds2
-            !     ! delU = delU_bar + [dU - dot(delU_bar,ds)]*ds/ds^2
-            !     ! delU_bar is the arithmetic mean of the left and right gradients.  In order to prevent checkerboarding on certain 
-            !     ! grids the gradient along the vector ds is replaced with a central difference.
-            ! end do
             
-            
-            ! delU = half * (gradT(:,c1) + gradT(:,c2))
-            ! face_gradT(:) = delU + ((Temp(c2) - Temp(c1)) - dot_product(delU,ds) ) * dsds2
-            ! mu_face = half * (mu(c1) + mu(c2)) ! mu = M_inf*mu_ND/Re_inf
-            ! tau = compute_tau(face_gradw,mu_face)
-            ! heat_conductivity = mu_face/((gamma - one) * Pr)
-            ! w_face = half * (w(2:4,c1) + w(2:4,c2))
-
-            ! theta_1 = w_face(1)*tau(1,1) + w_face(2)*tau(2,1) + w_face(3)*tau(3,1) + heat_conductivity * face_gradT(1)
-            ! theta_2 = w_face(1)*tau(1,2) + w_face(2)*tau(2,2) + w_face(3)*tau(3,2) + heat_conductivity * face_gradT(2)
-            ! theta_3 = w_face(1)*tau(1,3) + w_face(2)*tau(2,3) + w_face(3)*tau(3,3) + heat_conductivity * face_gradT(3)
-
-
-            ! visc_flux(1) = zero
-            ! visc_flux(2) = face_nrml(1,i)*tau(1,1) + face_nrml(2,i)*tau(1,2) + face_nrml(3,i)*tau(1,3)
-            ! visc_flux(3) = face_nrml(1,i)*tau(2,1) + face_nrml(2,i)*tau(2,2) + face_nrml(3,i)*tau(2,3)
-            ! visc_flux(4) = face_nrml(1,i)*tau(3,1) + face_nrml(2,i)*tau(3,2) + face_nrml(3,i)*tau(3,3)
-            ! visc_flux(5) = face_nrml(1,i)*theta_1  + face_nrml(2,i)*theta_2  + face_nrml(3,i)*theta_3
-
-            ! write(*,*) visc_flux
-            call viscous_flux(w(:,c1),w(:,c2), gradw1,gradw2, Temp(c1),Temp(c2), gradT(:,c1),gradT(:,c2), mu(c1),mu(c2), &
-                                                 unit_face_normal, & !<- unit face normal
-                            cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
-                            cell(c2)%xc, cell(c2)%yc, cell(c2)%zc, & !<- Right cell centroid
-                                                        visc_flux  )
-
-            ! write(*,*) visc_flux
             ds = (/cell(c2)%xc - cell(c1)%xc,cell(c2)%yc-cell(c1)%yc,cell(c2)%zc-cell(c1)%zc/)
             magds = sqrt(ds(1)**2 + ds(2)**2 + ds(3)**2)
             ds = ds/magds
-            ! call viscous_alpha(u1,u2,gradw1,gradw2,unit_face_normal,ds,magds,visc_flux)
-            
-            ! write(*,*) i,c1,c2,visc_flux
-            ! ! if (isnan(visc_flux(3))) then
-            ! !     write (*,*) "nan"
-            ! ! end if
-            ! write(*,*)
+            if (visc_flux_method == 'corrected') then ! Corrected gradient
+                call viscous_flux(w(:,c1),w(:,c2), gradw1,gradw2, Temp(c1),Temp(c2), gradT(:,c1),gradT(:,c2), mu(c1),mu(c2), &
+                                                    unit_face_normal, & !<- unit face normal
+                                cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
+                                cell(c2)%xc, cell(c2)%yc, cell(c2)%zc, & !<- Right cell centroid
+                                                            visc_flux  )
+            else if (visc_flux_method == 'alpha') then
+                call viscous_alpha(u1,u2,gradw1,gradw2,unit_face_normal,ds,magds,visc_flux)
+            else
+                write(*,*) 'Unsupported viscous flux method. Stop!'
+                stop
+            end if
+
             ! Add the viscous flux
             res(:,c1) = res(:,c1) + visc_flux * face_nrml_mag(i)
             res(:,c2) = res(:,c2) - visc_flux * face_nrml_mag(i)
@@ -264,59 +222,6 @@ contains
                     cycle
                     ! Add wall shear forces
                 else
-                    ! This computation is based off of section 15.6.1.1 in "The Finite Volume Method in Computational 
-                    ! Fluid Dynamics" (url: https://link.springer.com/book/10.1007/978-3-319-16874-6)
-
-                    ! wb = u2w(ub)
-
-                    ! mu_face = mu(c1) ! just set it to the cell value.  This should be sufficient.  We can be more clever later if we
-                    ! ! want...
-                    
-                    ! ! Vector from cell center to boundary face center: 
-                    ! d_Cb = -(/cell(c1)%xc - bface_centroid(1), cell(c1)%yc - bface_centroid(2), &
-                    !          cell(c1)%zc - bface_centroid(3)/)
-                    ! ! Component of d_Cb perpendicular to boundary face:
-                    ! d_perp = dot_product(d_Cb,unit_face_normal)
-
-                    ! ! Component of velocity at cell center that is parallel to boundary face
-                    ! ! V_par = V - (V * n)n
-                    ! ! V_parallel = w(2:4,c1) - dot_product(w(2:4,c1),unit_face_normal) * unit_face_normal
-
-                    ! ! Calculate the wall shear force:
-                    ! wall_shear = -(mu_face*bound(ib)%bface_nrml_mag(j)/d_perp) * &
-                    !             ((w(2:4,c1) - wb(2:4)) - (dot_product(w(2:4,c1) - wb(2:4),unit_face_normal)*unit_face_normal))
-                    ! ! I think I have the sign right...
-                    ! res(2:4,c1) = res(2:4,c1) + wall_shear * bound(ib)%bface_nrml_mag(j)
-
-                    ! ! Calculating wall temperature gradient
-                    
-                    ! ! Calculate two vectors from boundary face center to boundary nodes.
-                    ! bn1 = bound(ib)%bfaces(2,j)
-                    ! bn2 = bound(ib)%bfaces(3,j)
-                    ! del(1,:) = d_Cb
-                    ! del(2,:) = (/x(bn1), y(bn1), z(bn1)/) - bface_centroid
-                    ! del(3,:) = (/x(bn2), y(bn2), z(bn2)/) - bface_centroid
-
-                    ! call gewp_solve(del, 3, del_inv, os)
-
-                    ! face_gradT = matmul(del_inv,(/one - Temp(c1), zero, zero/))
-                    ! ! write(*,*) gradT(:,c1), ',', Temp(c1)
-                    ! heat_conductivity = mu_face/((gamma - one) * Pr) ! T_wall = T_inf = 1 (T is normalized with T_inf)
-
-                    ! res(5,c1) = res(5,c1) - heat_conductivity *  dot_product(face_gradT,unit_face_normal) &
-                    !             * bound(ib)%bface_nrml_mag(j)
-
-                    ! call viscous_bflux(w(:,c1),wb,Temp(c1),one,mu(c1), &
-                    !           cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
-                    !                               bface_centroid(1), &
-                    !                               bface_centroid(2), &
-                    !                               bface_centroid(3), & 
-                    !                           bound(ib)%bfaces(2,j), &
-                    !                           bound(ib)%bfaces(3,j), &
-                    !                     bound(ib)%bface_nrml_mag(j), &
-                    !                       bound(ib)%bface_nrml(:,j), &
-                    !                                       visc_flux  )
-
                     !* Building a ghost cell
                     !*           njk
                     !*  Face normal ^   o Ghost cell center
@@ -339,19 +244,24 @@ contains
                     call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
                                                  u1,gradw1,unit_face_normal,bc_type(ib),ub,gradwb)
 
-                    ! call viscous_alpha(u1,ub,gradw1,gradwb,bound(ib)%bface_nrml(:,j),ejk,mag_ejk,visc_flux)
-                    ! write(*,*) visc_flux
-                    w1 = w(:,c1)
-                    wb = u2w(ub)
-                    Tb = gamma*wb(5)/wb(1)
-                    a2 = gamma*half*(wb(5))/wb(1)
-                    grad_Tb = ( gamma*gradwb(:,5) - a2*gradwb(:,1)) /wb(1)
+                    if (visc_flux_method == 'alpha') then
+                        call viscous_alpha(u1,ub,gradw1,gradwb,bound(ib)%bface_nrml(:,j),ejk,mag_ejk,visc_flux)
+                    elseif (visc_flux_method == 'corrected') then
+                        w1 = w(:,c1)
+                        wb = u2w(ub)
+                        Tb = gamma*wb(5)/wb(1)
+                        a2 = gamma*half*(wb(5))/wb(1)
+                        grad_Tb = ( gamma*gradwb(:,5) - a2*gradwb(:,1)) /wb(1)
 
-                    call viscous_flux(w1,wb, gradw1,gradwb, Temp(c1),Tb, gradT(:,c1),grad_Tb, mu(c1),mu(c1), &
-                                                 unit_face_normal, & !<- unit face normal
-                          cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
-                         cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
-                                                        visc_flux  )
+                        call viscous_flux(w1,wb, gradw1,gradwb, Temp(c1),Tb, gradT(:,c1),grad_Tb, mu(c1),mu(c1), &
+                                                    unit_face_normal, & !<- unit face normal
+                            cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
+                            cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
+                                                            visc_flux  )
+                    else
+                        write(*,*) 'Unsupported viscous flux method. Stop!'
+                        stop
+                    end if
 
                     res(:,c1) = res(:,c1) + visc_flux * bound(ib)%bface_nrml_mag(j)
                     if (any(isnan(res(:,c1)))) then 

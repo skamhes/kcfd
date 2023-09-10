@@ -90,10 +90,11 @@
                                              generate_tec_file_v, &
                                                     project_name, &
                                                      import_data, &
-                                                      write_data
+                                                      write_data, &
+                                                       grid_type
 ! To access the subroutines: set_filenames and read_grid.
 
-    use module_common_data, only : set_filenames, read_grid
+    use module_common_data, only : set_filenames, read_grid, read_su2
 
     ! To access the subroutine "construct_ccfv_grid_data" in module_ccfv_data_grid.
     
@@ -128,8 +129,8 @@
     !-------------------------------------------------------------------------------
     ! Read the input parameters
 
-    ! call read_nml_input_parameters("input.nml")
-    call read_nml_input_parameters("airfoil_input.nml")
+    call read_nml_input_parameters("input.nml")
+    ! call read_nml_input_parameters("airfoil_input.nml")
     ! call read_nml_input_parameters("ellipse_input.nml")
     ! call read_nml_input_parameters("1D_shock.nml")
     ! call read_nml_input_parameters("flat_plate.nml")
@@ -140,8 +141,15 @@
 
     call set_filenames
 
-    call read_grid
-
+    if (trim(grid_type) == 'ugrid') then
+        call read_grid
+    elseif (trim(grid_type) == 'su2') then
+        call read_su2
+    else
+        write(*,*) 'Unsupported grid type: ', trim(grid_type), '. Stop!'
+        stop
+    endif
+    
     call construct_ccfv_grid_data
 
     call construct_ccfv_soln_data

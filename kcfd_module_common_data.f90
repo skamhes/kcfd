@@ -103,7 +103,7 @@ module module_common_data
      subroutine set_filenames
 
         !To access a user defined character "project_name"
-        use module_input_parameter       , only : project_name
+        use module_input_parameter       , only : project_name, grid_type
     
         implicit none
     
@@ -115,10 +115,15 @@ module module_common_data
         !-----------------------------------------------------------------------
         ! Input grid file (.ugrid):
         ! E.g., filename_grid = "test.grid" if project_name = "test".
-    
+        if (trim(grid_type) == 'ugrid') then
             filename_grid   = trim(project_name) // '.ugrid'
-    
-            write(*,'(a28,a28)') "   filename_grid = ", trim(filename_grid)
+        elseif (trim(grid_type) == 'su2') then
+            filename_grid   = trim(project_name) // '.su2'   
+        else
+            write(*,*) 'Unsupported grid type: ', trim(grid_type), '. Stop!'
+            stop
+        endif
+        write(*,'(a28,a28)') "   filename_grid = ", trim(filename_grid)
     
         !-----------------------------------------------------------------------
         ! Input boundary condition file (ASCII file)
@@ -441,7 +446,297 @@ module module_common_data
         write(*,*)
     end subroutine read_grid
     
+    subroutine read_su2
+        ! Read .su2 grid format
+        ! If anyone from the su2 group happens to read this maybe don't.  I wrote this at 2am and spent the minimum effort in order
+        ! to get it working.  You have been warned........ :)
+        implicit none
+        
+        integer :: os
+        integer :: i, ncells, dummy_int, comment_ind
+        integer :: ndim, mark_counter, nbfaces
+        integer, dimension(:), allocatable   :: cell_type
+        integer, dimension(:,:), allocatable :: input_cells
+        character(80) :: buffer, rawbuffer
+        logical :: read_dim = .false.
+        logical :: read_elm = .false.
+        logical :: read_bnd = .false.
+        logical :: read_nds = .false.
 
+        type temp_bound
+            integer                             ::    nb_faces, nb_tria, nb_quad
+            integer, dimension(:,:),allocatable ::    btria 
+            integer, dimension(:,:),allocatable ::    bquad 
+        end type temp_bound
+
+        type(temp_bound), dimension(:), allocatable :: btemp
+
+        
+        !integer , dimension(100,8) ::   dummy_debug ! use to debug public variables
+        write(*,*)
+        write(*,*) "-------------------------------------------------------"
+        write(*,*) " Reading : ", trim(filename_grid)
+        write(*,*)
+
+        !--------------------------------------------------------------------------------
+        !--------------------------------------------------------------------------------
+        ! 1. Read the grid file.
+
+        ! Open the input file.
+        open(unit=1, file=filename_grid, status="unknown", iostat=os)
+          
+        
+        nnodes = 0
+        ntria = 0
+        nquad = 0
+        ntet = 0
+        npyr = 0
+        nprs = 0
+        nhex = 0
+
+        do
+            read(1,'(A)') rawbuffer
+            rawbuffer = adjustl(rawbuffer)
+            ! Remove leading white spaces
+            comment_ind = index(rawbuffer,'%')
+            if (comment_ind == 0) then ! no comment present
+                buffer = rawbuffer
+            elseif (comment_ind == 1) then ! comment as first char.  Cycle
+                cycle
+            else
+                buffer = rawbuffer(1:comment_ind)
+            endif
+
+            if ( index(buffer,'NDIME') .ne. 0 ) then
+                backspace(1) ! re-read the line
+                read(1,*) rawbuffer, ndim
+                if (ndim == 3) then
+                    read_dim = .true.
+                    cycle ! correct number of dimensions
+                elseif (ndim == 2) then
+                    write(*,*) '2D flow not supported. Stop!'
+                    stop
+                else
+                    write(*,*) 'Invalid dimension. Stop!'
+                    stop
+                endif
+                cycle
+            endif
+
+            if ( index(buffer,'NELEM') .ne. 0 ) then
+                backspace(1) ! re-read the line
+                read(1,*) rawbuffer, ncells
+                allocate(cell_type(ncells))
+                allocate(input_cells(8,ncells))
+                count_cells : do i = 1,ncells
+                    read(1,*) cell_type(i),input_cells(:,i)
+                    select case (cell_type(i))
+                        case (3) ! line
+                            write(*,*) "There shouldn't be a line here.  Something is wrong. Stop!"
+                            stop
+                        case (5) ! triangle
+                            write(*,*) "There shouldn't be a triangle here.  Something is wrong. Stop!"
+                            stop
+                        case (9)
+                            write(*,*) "There shouldn't be a quad here.  Something is wrong. Stop!"
+                            stop
+                        case (10)
+                            ntet = ntet + 1
+                        case (12)
+                            nhex = nhex + 1
+                        case (13)
+                            nprs = nprs + 1
+                        case (14)
+                            npyr = npyr + 1
+                        case default
+                            write(*,*) "Invalid cell type.  Cell: ", i, ".  Something is wrong. Stop!"
+                            stop
+                    end select
+                end do count_cells
+                
+                input_cells = input_cells + 1 ! su2 starts counting at 0, I want to start with 1. This kinda feels like a hack...
+                ! I just realized all the cells are in row major.  But fixing it is gonna be a pita.  And this is only for loading.
+                ! So i guess I'll do it later... famous last words...
+                if (ntet > 0)  allocate(tet( ntet, 4))
+                if (npyr > 0)  allocate(pyr( npyr, 5))
+                if (nprs > 0)  allocate(prs( nprs, 6))
+                if (nhex > 0)  allocate(hex( nhex, 8))
+                ntet = 0
+                npyr = 0
+                nprs = 0
+                nhex = 0
+                add_cells : do i = 1,ncells
+                    select case (cell_type(i))
+                        case (10)
+                            ntet = ntet + 1
+                            tet(ntet,:) = input_cells(1:4,i)
+                        case (12)
+                            nhex = nhex + 1
+                            hex(nhex,:) = input_cells(1:8,i)
+                        case (13)
+                            nprs = nprs + 1
+                            prs(nprs,:) = input_cells(1:6,i)
+                        case (14)
+                            npyr = npyr + 1
+                            pyr(npyr,:) = input_cells(1:5,i)
+                        case default
+                            write(*,*) "Invalid cell type.  Cell: ", i, ".  Something is wrong. Stop!"
+                            stop
+                    end select
+                end do add_cells
+                deallocate(cell_type)
+                deallocate(input_cells)
+                read_elm = .true.
+                cycle
+            end if
+
+            if ( index(buffer,'NPOIN') .ne. 0 ) then
+                backspace(1) ! re-read the line
+                read(1,*) rawbuffer, nnodes
+                allocate(x(nnodes),y(nnodes),z(nnodes))
+                read_nodes : do i = 1,nnodes
+                    read(1,*) x(i), y(i), z(i)
+                end do read_nodes
+                read_nds = .true.
+                cycle
+            end if
+
+            if ( index(buffer,'NMARK') .ne. 0 ) then
+                backspace(1) ! re-read the line
+                read(1,*) rawbuffer, nb
+                mark_counter = 1
+                allocate(btemp(nb))
+                loop_marks : do
+                    read(1,'(A)') buffer
+                    if ( index(buffer,'MARKER_ELEMS') .ne. 0 ) then
+                        backspace(1)
+                        read(1,*) rawbuffer, btemp(mark_counter)%nb_faces
+                        allocate(cell_type(    btemp(mark_counter)%nb_faces))
+                        allocate(input_cells(4,btemp(mark_counter)%nb_faces))
+                        btemp(mark_counter)%nb_tria = 0
+                        btemp(mark_counter)%nb_quad = 0
+                        count_bfaces : do i = 1,btemp(mark_counter)%nb_faces
+                            read(1,*) cell_type(i),input_cells(:,i)
+                            select case (cell_type(i))
+                                case (3) ! line
+                                    write(*,*) "There shouldn't be a line here.  Something is wrong. Stop!"
+                                    stop
+                                case (5) ! triangle
+                                    btemp(mark_counter)%nb_tria = btemp(mark_counter)%nb_tria + 1
+                                case (9)
+                                    btemp(mark_counter)%nb_quad = btemp(mark_counter)%nb_quad + 1
+                                case default
+                                    write(*,*) "Invalid bface type.  Bface: ", i, ".  Something is wrong. Stop!"
+                                    stop
+                            end select
+                        end do count_bfaces
+                        input_cells = input_cells + 1
+                        if (btemp(mark_counter)%nb_tria > 0)  allocate(btemp(mark_counter)%btria( btemp(mark_counter)%nb_tria, 4))
+                        if (btemp(mark_counter)%nb_quad > 0)  allocate(btemp(mark_counter)%bquad( btemp(mark_counter)%nb_quad, 5))
+                        btemp(mark_counter)%nb_tria = 0
+                        btemp(mark_counter)%nb_quad = 0
+                        add_bfaces : do i = 1,btemp(mark_counter)%nb_faces
+                            select case (cell_type(i))
+                                case (5)
+                                    btemp(mark_counter)%nb_tria = btemp(mark_counter)%nb_tria + 1
+                                    btemp(mark_counter)%btria(btemp(mark_counter)%nb_tria,1:3) = input_cells(1:3,i)
+                                    btemp(mark_counter)%btria(btemp(mark_counter)%nb_tria,  4) = mark_counter
+                                case (9)
+                                    btemp(mark_counter)%nb_quad = btemp(mark_counter)%nb_quad + 1
+                                    btemp(mark_counter)%bquad(btemp(mark_counter)%nb_quad,1:4) = input_cells(1:4,i)
+                                    btemp(mark_counter)%bquad(btemp(mark_counter)%nb_quad,5)   = mark_counter
+                                case default
+                                    write(*,*) "Invalid bface type.  Bface: ", i, ".  Something is wrong. Stop!"
+                                    stop
+                            end select
+                        end do add_bfaces
+                        deallocate(input_cells,cell_type)
+                    else
+                        cycle loop_marks
+                    end if
+                    mark_counter = mark_counter + 1
+                    if (mark_counter > nb) then
+                        exit loop_marks
+                    end if
+                end do loop_marks
+
+                combine_marks1 : do i = 1,nb
+                    ntria = ntria + btemp(i)%nb_tria
+                    nquad = nquad + btemp(i)%nb_quad
+                end do combine_marks1
+
+                if (ntria > 0) allocate(tria(ntria,4))
+                if (nquad > 0) allocate(quad(nquad,5))
+                ntria = 0
+                nquad = 0
+                combine_marks2 : do i = 1,nb
+                    if (btemp(i)%nb_tria > 0) then
+                        tria(ntria+1:(ntria + btemp(i)%nb_tria),:) = btemp(i)%btria(:,:)
+                        deallocate(btemp(i)%btria)
+                    end if
+                    if (btemp(i)%nb_quad > 0) then
+                        quad(nquad+1:nquad + btemp(i)%nb_quad,:) = btemp(i)%bquad(:,:)
+                        deallocate(btemp(i)%bquad)
+                    end if
+                    ntria = ntria + btemp(i)%nb_tria
+                    nquad = nquad + btemp(i)%nb_quad
+                    
+                end do combine_marks2
+                deallocate(btemp)
+                read_bnd = .true.
+            end if
+
+            if (read_bnd .and. read_dim .and. read_elm .and. read_nds) exit ! everything is done
+        end do
+
+        close(1)
+
+        write(*,*) ' Finished reading .su2 grid.'
+        write(*,*)
+        write(*,*) " Total grid numbers:"
+        write(*,*) "      Nodes = ", nnodes
+        write(*,*) "  Triangles = ", ntria
+        write(*,*) "      Quads = ", nquad
+        write(*,*) "      Tetra = ", ntet
+        write(*,*) "      Hexa  = ", nhex
+        write(*,*) "   Pyramids = ", npyr
+        write(*,*) "     Prisms = ", nprs
+        write(*,*)
+
+
+         !--------------------------------------------------------------------------------
+        !--------------------------------------------------------------------------------
+        ! 2. Read the boundary condition data file
+        write(*,*)
+        write(*,*) "-------------------------------------------------------"
+        write(*,*) " Reading the boundary condition file: ", &
+            trim(filename_bc)
+        write(*,*)
+
+        open(unit=2, file=filename_bc, status="unknown", iostat=os)
+        read(2,*) nb
+        
+        allocate(bc_type(nb))
+        do i = 1, nb
+            read(2,*) dummy_int, bc_type(i)                               
+        end do
+        !  Print the data
+        do i = 1, nb
+            write(*,'(a10,i3,a12,a20)') " boundary", i, "  bc_type = ", trim(bc_type(i))
+        end do
+
+        write(*,*)
+
+        close(2)
+        ! End of Read the boundary condition data file
+        !--------------------------------------------------------------------------------
+
+        write(*,*)
+        write(*,*) " Finished Reading : ", trim(filename_grid), " and ",&
+            trim(filename_bc)
+        write(*,*) "-------------------------------------------------------"
+        write(*,*)
+    end subroutine read_su2
 
 
 end module module_common_data

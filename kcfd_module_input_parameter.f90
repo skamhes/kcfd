@@ -13,6 +13,7 @@ module module_input_parameter
   
   ! Project name
     character(80) ::      project_name = "default"    ! project name
+    character(80) ::         grid_type = "ugrid"
   
   ! To write a Tecplot data file
     logical       :: generate_tec_file_b = .true.  ! generate_tec_file = T
@@ -55,6 +56,7 @@ module module_input_parameter
 
     ! Navier-Stokes Info
     logical :: navier_stokes = .false.
+    character(80) :: visc_flux_method = 'alpha'
     real(p2) :: R = 287.058 ! ideal gas constant for air
     real(p2) :: Freestream_Temp = 293.15 ! degK Sea level room temp
     real(p2) :: Pr = 0.72 ! Prandtl number for sea-level air
@@ -102,7 +104,9 @@ module module_input_parameter
     CFL_start            , &
     CFL_start_iter       , &
     CFL_steps            , &
-    jacobian_method
+    jacobian_method      , &
+    grid_type            , &
+    visc_flux_method
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)
