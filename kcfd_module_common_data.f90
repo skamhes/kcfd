@@ -255,8 +255,12 @@ module module_common_data
         ! 1. Read the grid file.
 
         ! Open the input file.
-        open(unit=1, file=filename_grid, status="unknown", iostat=os)
+        open(unit=1, file=filename_grid, status="old", iostat=os)
 
+        if (os .NE. 0) then
+            write(*,*)  "FILE ERROR: STOP!"
+            stop
+        end if
         ! Read: get the size of the grid
         read(1,*) nnodes, ntria, nquad, ntet, npyr, nprs, nhex
 
@@ -454,7 +458,7 @@ module module_common_data
         
         integer :: os
         integer :: i, ncells, dummy_int, comment_ind
-        integer :: ndim, mark_counter, nbfaces
+        integer :: ndim, mark_counter
         integer, dimension(:), allocatable   :: cell_type
         integer, dimension(:,:), allocatable :: input_cells
         character(80) :: buffer, rawbuffer

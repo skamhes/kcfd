@@ -1379,9 +1379,9 @@ contains
         ! Essentially the normal vector of a quad face is the sum of the two tri faces that combine to form it
 
         ! Some local vars
-        real(p2), dimension(3) :: normal1, normal2      ! normal vectors of the two triangles
-        real(p2)               :: area1, area2, mag     ! area of the two triangles
-        real(p2)               :: nx, nx1
+        ! real(p2), dimension(3) :: normal1, normal2      ! normal vectors of the two triangles
+        ! real(p2)               :: area1, area2, mag     ! area of the two triangles
+        ! real(p2)               :: nx, nx1
         
         ! call trinormal(x1,y1,z1, x2,y2,z2, x3,y3,z3, normal1, area1)
         ! call trinormal(x1,y1,z1, x3,y3,z3, x4,y4,z4, normal2, area2)
@@ -1406,9 +1406,9 @@ contains
         real(p2), dimension(3), intent(out) ::  normal          ! unit normal vecotr
         real(p2),               intent(out) ::  area      ! magnitude of normal vector (face area)
         ! Local Vars
-        real(p2), dimension(3)              :: a, b 
-        real(p2)                            :: mag
-        real(p2) :: nx,ny,nz
+        ! real(p2), dimension(3)              :: a, b 
+        ! real(p2)                            :: mag
+        ! real(p2) :: nx,ny,nz
         ! This should be cleaned up at some point, perhaps when I get to the chapter in my book on libraries...
         ! a(1) = x2-x1
         ! a(2) = y2-y1  

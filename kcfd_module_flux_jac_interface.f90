@@ -5,15 +5,17 @@ module module_flux_jac_interface
     public :: interface_jac_visc ! compute flux jacobian at interior face for viscous flux.
 contains
 
-    subroutine interface_jac(wj, wk, njk, dFnduL, dFnduR)
+    subroutine interface_jac(wj, wk, njk, dFnduL, dFnduR, uR2L, uR2R )
         use derivative_data_df5
-        use module_common_data, only : p2
-        use module_input_parameter, only : inviscid_jac
+        use module_common_data, only : p2, zero, one, half
+        use module_input_parameter, only : inviscid_jac, low_mach_correction
         use flux_functions_ddt    , only :      roe_ddt, &
                                             rusanov_ddt, &
                                                 hll_ddt, &
-                                               rhll_ddt
-        use module_ccfv_data_soln , only : w2u
+                                               rhll_ddt, &
+                                       roe_low_mach_ddt, &
+                                       roe_prim_low_mach_ddt
+        use module_ccfv_data_soln , only : w2u, u2q
 
         implicit none
 
@@ -23,29 +25,53 @@ contains
         real(p2), dimension(5,5), intent(out) :: dFnduL, dFnduR
 
         ! Local vavrs
-        real(p2), dimension(5)      :: wL, wR
+        real(p2), dimension(5)      :: wL, wR, uL, uR
         real(p2), dimension(5,5)    :: dfndu
         real(p2), dimension(5)      :: dummy5
         real(p2)                    :: wsn
+        
+        real(p2), optional,         intent(in) :: uR2L, uR2R        ! preconditioner scaling factor
+        integer :: i, ii
+        type(derivative_data_type_df5), dimension(5) :: uL_ddt, uR_ddt, qL_ddt, qR_ddt
+        type(derivative_data_type_df5)               :: uR2L_ddt, uR2R_ddt
 
-        integer :: i
-        type(derivative_data_type_df5), dimension(5) :: uL_ddt, uR_ddt
+        ! ! debugging
+        ! real(p2) :: H,rho_T,rho_p, theta
+        ! real(p2) :: gamma = 1.4_p2
+        ! real(p2), dimension(5,5) :: dudq, dfdq
 
         jac_L_R : do i = 1,2
-            ! No reconstruction
-            wL = wj
-            wR = wk
-            ! convert to conservative variables in ddt
-            uL_ddt = w2u(wL)
-            uR_ddt = w2u(wR)
+            if (low_mach_correction) then
+                qL_ddt = wj
+                qR_ddt = wk
+                if (i == 1) then
+                    ! Using derivative for uL_ddt
+                    call ddt_seed(qL_ddt)
+                    uL_ddt = q2u_ddt(qL_ddt)
+                    uR_ddt = q2u_ddt(qR_ddt)
+                else ! i = 2
+                    ! Using derivative for uR_ddt
+                    call ddt_seed(qR_ddt)
+                    uL_ddt = q2u_ddt(qL_ddt)
+                    uR_ddt = q2u_ddt(qR_ddt)
+                end if
 
-            ! determine which state the flux derivative is computed wrt
-            if (i == 1) then
-                ! Using derivative for uL_ddt
-                call ddt_seed(uL_ddt)
-            else ! i = 2
-                ! Using derivative for uR_ddt
-                call ddt_seed(uR_ddt)
+            else
+                ! No reconstruction
+                wL = wj
+                wR = wk
+                ! convert to conservative variables in ddt
+                uL_ddt = w2u(wL)
+                uR_ddt = w2u(wR)
+
+                ! determine which state the flux derivative is computed wrt
+                if (i == 1) then
+                    ! Using derivative for uL_ddt
+                    call ddt_seed(uL_ddt)
+                else ! i = 2
+                    ! Using derivative for uR_ddt
+                    call ddt_seed(uR_ddt)
+                end if
             end if
 
             !---------------------------------------------------------------------------------
@@ -67,7 +93,11 @@ contains
             !  (1) Roe flux
             !------------------------------------------------------------
             if(trim(inviscid_jac)=="roe") then
-                call roe_ddt(uL_ddt,uR_ddt,njk, dummy5,dfndu,wsn)
+                if (low_mach_correction) then
+                    call roe_low_mach_ddt(uL_ddt,uR_ddt,uR2L,uR2R,njk,dummy5,dfndu,wsn)
+                else
+                    call roe_ddt(uL_ddt,uR_ddt,njk, dummy5,dfndu,wsn)
+                end if
             !------------------------------------------------------------
             !  (2) Rusanov flux
             !------------------------------------------------------------
@@ -157,6 +187,7 @@ contains
             endif
         end do jac_L_R
     end subroutine interface_viscous_alpha_jacobian
+
     subroutine interface_jac_visc(wL, wR, TL, TR, muL, muR, gradVelL, gradVelR, njk, delta_s, dFnduL, dFnduR)
 
         ! This subroutine builds the interface flux jacobian as outlined in section 4.12 of I do like CFD.
@@ -329,4 +360,34 @@ contains
         end do
 
     end subroutine interface_jac_visc
+
+    !********************************************************************************
+    ! Compute U from W (ddt version)
+    !
+    ! ------------------------------------------------------------------------------
+    !  Input:  q =    primitive variables (  p,     u,     v,     w,     T)
+    ! Output:  u = conservative variables (rho, rho*u, rho*v, rho*w, rho*E)
+    ! ------------------------------------------------------------------------------
+    !
+    ! Note: rho*E = p/(gamma-1) + rho*0.5*(u^2 + v^2 + w^2)
+    !       rho   = p/(gamma*T)
+    !********************************************************************************
+    function q2u_ddt(q_in) result(u_out)
+
+        use module_common_data, only : p2, one, half
+        use module_ccfv_data_soln, only : gamma
+        use derivative_data_df5
+
+        implicit none
+    
+        type(derivative_data_type_df5), dimension(5), intent(in) :: q_in ! input
+        type(derivative_data_type_df5), dimension(5)             :: u_out !output
+    
+        u_out(1) = q_in(1)*gamma / q_in(5)
+        u_out(2) = u_out(1)*q_in(2)
+        u_out(3) = u_out(1)*q_in(3)
+        u_out(4) = u_out(1)*q_in(4)
+        u_out(5) = q_in(1)/(gamma-one)+half*u_out(1)*(q_in(2)*q_in(2)+q_in(3)*q_in(3)+q_in(4)*q_in(4))
+    
+    end function q2u_ddt
 end module module_flux_jac_interface

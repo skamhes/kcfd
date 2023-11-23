@@ -14,7 +14,7 @@ module module_write_files
             use module_common_data, only : filename_tecplot_b
             !To access the solution data.
             use module_ccfv_data_grid, only : cell, ncells, bound, bound_export
-            use module_ccfv_data_soln, only : w, ir, iu, iv, iw, ip, Temp, mu
+            use module_ccfv_data_soln, only : w, ir, iu, iv, iw, ip, Temp, mu, gamma
 
             use module_input_parameter       , only : project_name, navier_stokes
             use module_ccfv_gradient         , only : my_alloc_int_ptr
@@ -32,6 +32,7 @@ module module_write_files
             real(p2), dimension(:  ), allocatable :: tn, mun, Mn
             type(bnode_type), dimension(nb)   :: bnode_data
             logical                           :: already_added
+            real(p2)                          :: an
 
             allocate(wn(5, nnodes))
             allocate(nc(   nnodes))
@@ -63,7 +64,9 @@ module module_write_files
                     tn(j) = tn(j) / nc(j)
                     mun(j) = mun(j) / nc(j)
                 end if
-                Mn(j) = sqrt(wn(2,j)**2 + wn(3,j)**2 + wn(4,j)**2) ! mach number
+                Mn(j) = sqrt(wn(2,j)**2 + wn(3,j)**2 + wn(4,j)**2)  ! mach number (wrt free stream a)
+                an    = sqrt(gamma*wn(5,j)/wn(1,j))                   ! local speed of sound
+                Mn(j) = Mn(j) / an                                  ! local mach number
             end do
 
             allocate(bound_export(nb))

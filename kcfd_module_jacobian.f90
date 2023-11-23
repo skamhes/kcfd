@@ -7,24 +7,30 @@ contains
     
     subroutine compute_jacobian
         
-        use module_common_data          , only : p2, zero, nb, bc_type
+        use module_common_data          , only : p2, zero, nb, bc_type, half, one, two
         use module_flux_jac_interface   , only : interface_jac, interface_jac_visc, interface_viscous_alpha_jacobian
         use module_ccfv_data_grid       , only : nfaces, face, ncells, cell, face_nrml, face_nrml_mag, jac, &
                                                  kth_nghbr_of_1, kth_nghbr_of_2, bound
-        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw
+        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw, uR2, gamma, wsn, q, u2q, res, q2u
         use module_bc_states            , only : get_right_state, get_viscous_right_state
         use module_gewp                 , only : gewp_solve
-        use module_input_parameter      , only : navier_stokes
+        use module_input_parameter      , only : navier_stokes, low_mach_correction
         
         implicit none
         ! Local Vars
-        integer                     :: c1, c2, i, k, ib, idestat, j
+        integer                     :: c1, c2, i, k, ib, idestat, j, os
         real(p2), dimension(3)      :: unit_face_nrml, bface_centroid, ds, d_Cb, ejk
-        real(p2), dimension(5)      :: u1, u2, ub, wb
+        real(p2), dimension(5)      :: u1, u2, ub, wb, qb, q1
         real(p2), dimension(3,5)    :: gradw1, gradw2, gradwb
         real(p2), dimension(5,5)    :: dFnduL, dFnduR
         real(p2)                    :: face_mag, mag_ds, mag_ejk
         real(p2)                    :: xc1,xc2,yc1,yc2,zc1,zc2
+
+        real(p2), dimension(5,5)    :: preconditioner, pre_inv
+        real(p2), dimension(5,5)    :: duLdqL, duRdqR
+        real(p2)                    :: theta
+        real(p2)                    :: rho_p, rho_T, rho
+        real(p2)                    :: H, alpha, beta, lambda, absu
         
         ! Initialize jacobian terms
         do i = 1,ncells
@@ -39,8 +45,47 @@ contains
 
             unit_face_nrml = face_nrml(1:3,i)
             face_mag       = face_nrml_mag(i)
+
             ! Compute the flux Jacobian for given w1 and w2
-            call interface_jac( w(:,c1), w(:,c2), unit_face_nrml, dFnduL, dFnduR)
+            if (low_mach_correction) then
+
+                ! in this case dFndu_ is actually dFndq_.  I'm developing a rather long list of things that need to be fixed...
+                call interface_jac( q(:,c1), q(:,c2), unit_face_nrml, dFnduL, dFnduR, uR2L = uR2(c1), uR2R = uR2(c2))
+
+                ! ! Define some quantities for the left side
+                ! H = ((gamma*w(5,c1)/w(1,c1))**2)/(gamma-one) + half * ( w(2,c1)**2 + w(3,c1)**2 + w(4,c1)**2 )
+                ! rho_p = w(1,c1)/w(5,c1)
+                ! rho_T = - (w(1,c1)**2)/(w(5,c1)*gamma)
+                ! theta = (one/uR2(c1)) - rho_T*(gamma - one)/(w(1,c1))
+
+                ! ! Switch into derivatives w.r.t. Q
+                ! duLdqL(1,:) = (/ rho_p,         zero,            zero,            zero,            rho_T                        /)
+                ! duLdqL(2,:) = (/ rho_p*w(2,c1), w(1,c1),         zero,            zero,            rho_T*w(2,c1)                /)
+                ! duLdqL(3,:) = (/ rho_p*w(3,c1), zero,            w(1,c1),         zero,            rho_T*w(3,c1)                /)
+                ! duLdqL(4,:) = (/ rho_p*w(4,c1), zero,            zero,            w(1,c1),         rho_T*w(4,c1)                /)
+                ! duLdqL(5,:) = (/ rho_p*H - one, w(1,c1)*w(2,c1), w(1,c1)*w(3,c1), w(1,c1)*w(4,c1), rho_T*H + w(1,c1)/(gamma-one)/)
+
+                ! ! Now do the same for the right
+
+                ! H = ((gamma*w(5,c2)/w(1,c2))**2)/(gamma-one) + half * ( w(2,c2)**2 + w(3,c2)**2 + w(4,c2)**2 )
+                ! rho_p = w(1,c2)/w(5,c2)
+                ! rho_T = - (w(1,c2)**2)/(w(5,c2)*gamma)
+                ! theta = (one/uR2(c2)) - rho_T*(gamma - one)/(w(1,c2))
+
+                ! ! Switch into derivatives w.r.t. Q
+                ! duRdqR(1,:) = (/ rho_p,         zero,            zero,            zero,            rho_T                        /)
+                ! duRdqR(2,:) = (/ rho_p*w(2,c2), w(1,c2),         zero,            zero,            rho_T*w(2,c2)                /)
+                ! duRdqR(3,:) = (/ rho_p*w(3,c2), zero,            w(1,c2),         zero,            rho_T*w(3,c2)                /)
+                ! duRdqR(4,:) = (/ rho_p*w(4,c2), zero,            zero,            w(1,c2),         rho_T*w(4,c2)                /)
+                ! duRdqR(5,:) = (/ rho_p*H - one, w(1,c2)*w(2,c2), w(1,c2)*w(3,c2), w(1,c2)*w(4,c2), rho_T*H + w(1,c2)/(gamma-one)/)
+
+                ! ! Now we want dF/dQ = (dF/dU)(dU/dQ).  For simplicity we will still be calling it dFdU
+                ! dFnduL = matmul(dFnduL,duLdqL)
+                ! dFnduR = matmul(dFnduR,duRdqR)
+
+            else
+                call interface_jac( w(:,c1), w(:,c2), unit_face_nrml, dFnduL, dFnduR)
+            end if
 
             ! Add to diagonal term of C1
             jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
@@ -92,6 +137,14 @@ contains
 
                 call interface_viscous_alpha_jacobian(u1,u2,gradw1,gradw2,unit_face_nrml,ds,mag_ds,dFnduL,dFnduR)
 
+                ! if (low_mach_correction) then
+    
+                !     ! We want dF/dQ = (dF/dU)(dU/dQ).  We don't need to redifine the left and right states.
+                !     dFnduL = matmul(dFnduL,duLdqL)
+                !     dFnduR = matmul(dFnduR,duRdqR)
+    
+                ! end if
+
                 ! Add to diagonal term of C1
                 jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
                 ! get neighbor index k for cell c1
@@ -113,14 +166,44 @@ contains
         bound_loop : do ib = 1,nb
             bfaces_loop : do i = 1,bound(ib)%nbfaces
                 c1 = bound(ib)%bcell(i)
-                u1 = u(1:5,c1)
+                
                 bface_centroid = bound(ib)%bface_center(:,i)
                 unit_face_nrml = bound(ib)%bface_nrml(:,i)
                 face_mag       = bound(ib)%bface_nrml_mag(i)
-                call get_right_state(bface_centroid(1), bface_centroid(2), bface_centroid(3), &
+                
+                
+                
+                if (low_mach_correction) then
+                    q1 = q(:,c1)
+                    u1 = q2u(q1)
+                    call get_right_state(bface_centroid(1), bface_centroid(2), bface_centroid(3), &
                                      u1, unit_face_nrml, bc_type(ib), ub)
-                wb = u2w(ub)
-                call interface_jac( w(:,c1), wb, unit_face_nrml, dFnduL, dFnduR)
+                    qb = u2q(ub)
+                    call interface_jac( q1, qb, unit_face_nrml, dFnduL, dFnduR, uR2L = uR2(c1), uR2R = uR2(c1))
+                    ! Define some quantities for the left side
+                    ! H = ((gamma*w(5,c1)/w(1,c1))**2)/(gamma-one) + half * ( w(2,c1)**2 + w(3,c1)**2 + w(4,c1)**2 )
+                    ! rho_p = w(1,c1)/w(5,c1)
+                    ! rho_T = - (w(1,c1)**2)/(w(5,c1)*gamma)
+                    ! theta = (one/uR2(c1)) - rho_T*(gamma - one)/(w(1,c1))
+
+                    ! ! Switch into derivatives w.r.t. Q
+                    ! duLdqL(1,:)=(/rho_p,         zero,            zero,            zero,            rho_T                        /)
+                    ! duLdqL(2,:)=(/rho_p*w(2,c1), w(1,c1),         zero,            zero,            rho_T*w(2,c1)                /)
+                    ! duLdqL(3,:)=(/rho_p*w(3,c1), zero,            w(1,c1),         zero,            rho_T*w(3,c1)                /)
+                    ! duLdqL(4,:)=(/rho_p*w(4,c1), zero,            zero,            w(1,c1),         rho_T*w(4,c1)                /)
+                    ! duLdqL(5,:)=(/rho_p*H - one, w(1,c1)*w(2,c1), w(1,c1)*w(3,c1), w(1,c1)*w(4,c1), rho_T*H + w(1,c1)/(gamma-one)/)
+
+                    ! ! Now we want dF/dQ = (dF/dU)(dU/dQ).  For simplicity we will still be calling it dFdU
+                    ! dFnduL = matmul(dFnduL,duLdqL)
+                
+                else
+                    u1 = u(1:5,c1)
+                    call get_right_state(bface_centroid(1), bface_centroid(2), bface_centroid(3), &
+                                     u1, unit_face_nrml, bc_type(ib), ub)
+                    wb = u2w(ub)
+                    call interface_jac( w(:,c1), wb, unit_face_nrml, dFnduL, dFnduR)
+                end if
+
                 ! We only have a diagonal term to add
                 jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
 
@@ -137,6 +220,16 @@ contains
                                                  u1,gradw1,unit_face_nrml,bc_type(ib),ub,gradwb)
 
                     call interface_viscous_alpha_jacobian(u1,ub,gradw1,gradwb,unit_face_nrml,ejk,mag_ejk,dFnduL,dFnduR)
+
+                    ! if (low_mach_correction) then
+    
+                    !     ! We want dF/dQ = (dF/dU)(dU/dQ).  We don't need to redifine the left and right states.
+                    !     dFnduL = matmul(dFnduL,duLdqL)
+
+                    ! end if
+
+                    jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
+
                 end if
             end do bfaces_loop
         end do bound_loop
@@ -147,9 +240,56 @@ contains
         ! matrix having vol(i)/dtau(i) for each node, and Res1 is the first-order
         ! residual.
         do i = 1,ncells
-            do k = 1,5
-                jac(i)%diag(k,k) = jac(i)%diag(k,k) + cell(i)%vol/dtau(i)
-            end do
+            if (low_mach_correction) then
+                
+                H = ((q(5,i))**2)/(gamma-one) + half * ( q(2,i)**2 + q(3,i)**2 + q(4,i)**2 )
+                rho_p = gamma/q(5,i)
+                rho_T = - (q(1,i)*gamma)/(q(5,i)**2)
+                rho = q(1,i)*gamma/q(5,i)
+                theta = (1/uR2(i)) - rho_T*(gamma - one)/(rho)
+                
+                preconditioner(1,:) = (/ theta,        zero,       zero,       zero,       rho_T                    /)
+                preconditioner(2,:) = (/ theta*q(2,i), rho,        zero,       zero,       rho_T*q(2,i)             /)
+                preconditioner(3,:) = (/ theta*q(3,i), zero,       rho,        zero,       rho_T*q(3,i)             /)
+                preconditioner(4,:) = (/ theta*q(4,i), zero,       zero,       rho,        rho_T*q(4,i)             /)
+                preconditioner(5,:) = (/ theta*H-one,  rho*q(2,i), rho*q(3,i), rho*q(4,i), rho_T*H + rho/(gamma-one)/)
+
+
+                beta = rho_p + rho_T*(gamma-one)/rho
+                alpha = half * (one - beta * uR2(i))
+                absu = sqrt(q(2,i)**2 + q(3,i)**2 + q(4,i)**2 )
+                lambda = absu*(one-alpha) + sqrt((alpha**2) * (absu**2) + uR2(i))
+                dtau(i) = dtau(i) * two * wsn(i) / lambda
+
+                ! jac(i)%diag(:,:) = jac(i)%diag(:,:) + preconditioner * cell(i)%vol/dtau(i)
+
+                ! !         Old stuff
+                !         call gewp_solve(preconditioner, 5, pre_inv, os)
+                !         if (os .ne. 0) then
+                !             write(*,*) 'Error inverting precondition matrix at cell: ', i,' Stop!'
+                !             stop
+                !         end if
+
+                !         jac(i)%diag = matmul(pre_inv,jac(i)%diag)
+
+                !         do k = 1,cell(i)%nnghbrs
+                !             jac(i)%off_diag(:,:,k) = matmul(pre_inv,jac(i)%off_diag(:,:,k))
+                !         end do
+                        
+                !         res(:,i) = matmul(pre_inv,res(:,i))
+
+                !     end if
+
+                !     do k = 1,5
+                !         jac(i)%diag(k,k) = jac(i)%diag(k,k) + cell(i)%vol/dtau(i)
+                !     end do
+                
+
+            else
+                do k = 1,5
+                    jac(i)%diag(k,k) = jac(i)%diag(k,k) + cell(i)%vol/dtau(i)
+                end do
+            end if
         end do
 
         ! Invert the diagonal block matrices using Gauss elimination with pivoting

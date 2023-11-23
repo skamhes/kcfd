@@ -9,16 +9,17 @@ module module_flux
     contains
     subroutine interface_flux(u1, u2, gradw1, gradw2, n12, &
                              xc1, yc1, zc1, xc2, yc2, zc2, &
-                              xm, ym, zm, phi1, phi2, num_flux, wsn )
+                              xm, ym, zm, phi1, phi2, num_flux, wsn, uR2L, uR2R )
         use module_common_data     , only : p2, zero
         use module_input_parameter , only : inviscid_flux !name of flux specified as input
         use module_input_parameter , only : accuracy_order
-        use module_ccfv_data_soln  , only : u2w, w2u      !variable conversion functions  
+        use module_input_parameter , only : low_mach_correction
+        use module_ccfv_data_soln  , only : u2w, w2u, q2u !variable conversion functions  
 
         implicit none
 
         ! Inputs
-        real(p2), dimension(5),     intent(in) :: u1, u2            ! Conservative vars
+        real(p2), dimension(5),     intent(in) :: u1, u2            ! Conservative vars (prim for low mach)
         real(p2), dimension(3,5),   intent(in) :: gradw1, gradw2    ! Gradients of primitive vars
         real(p2), dimension(3),     intent(in) :: n12               ! Unit area vector (from c1 to c2)
         real(p2),                   intent(in) :: xc1, yc1, zc1     ! Left cell centroid
@@ -26,37 +27,64 @@ module module_flux
         real(p2),                   intent(in) :: xm, ym, zm        ! Face midpoint
         real(p2),                   intent(in) :: phi1, phi2        ! Limiter
 
+        real(p2), optional,         intent(in) :: uR2L, uR2R        ! preconditioner scaling factor
         ! Output
         real(p2), dimension(5),     intent(out) :: num_flux         ! Output
         real(p2),                   intent(out) :: wsn              ! Max wave speed at face
 
         ! Local Vars
         real(p2), dimension(5) :: w1, w2 ! Primitive vars at centroids
-        real(p2), dimension(5) :: wL, wR ! primitive vars reconstructed to face
+        real(p2), dimension(5) :: wL, wR, qL, qR ! primitive vars reconstructed to face
         real(p2), dimension(5) :: uL, uR ! conservative vars computed from wL and wR
 
-        w1 = u2w(u1)
-        w2 = u2w(u2)
-        ! Linear reconstruction
-        if (accuracy_order == 2) then
-            wL = w1 + phi1 * ( gradw1(1,:)*(xm-xc1) + gradw1(2,:)*(ym-yc1) + gradw1(3,:)*(zm-zc1) )
-            wR = w2 + phi2 * ( gradw2(1,:)*(xm-xc2) + gradw2(2,:)*(ym-yc2) + gradw2(3,:)*(zm-zc2) )
+        if (low_mach_correction) then !(q1 = u1, q2 = u2)
+            if (accuracy_order == 2) then
+                qL = u1 + phi1 * ( gradw1(1,:)*(xm-xc1) + gradw1(2,:)*(ym-yc1) + gradw1(3,:)*(zm-zc1) ) ! gradq <=> gradw (var) 
+                qR = u2 + phi2 * ( gradw2(1,:)*(xm-xc2) + gradw2(2,:)*(ym-yc2) + gradw2(3,:)*(zm-zc2) ) ! u <=> q (vars)
+            else
+                qL = u1 
+                qR = u2
+            end if
+            uL = q2u(qL)
+            uR = q2u(qR)
         else
-            wL = w1
-            wR = w2
+            w1 = u2w(u1)
+            w2 = u2w(u2)
+            ! Linear reconstruction
+            if (accuracy_order == 2) then
+                wL = w1 + phi1 * ( gradw1(1,:)*(xm-xc1) + gradw1(2,:)*(ym-yc1) + gradw1(3,:)*(zm-zc1) )
+                wR = w2 + phi2 * ( gradw2(1,:)*(xm-xc2) + gradw2(2,:)*(ym-yc2) + gradw2(3,:)*(zm-zc2) )
+            else
+                wL = w1
+                wR = w2
+            end if
+            ! Flux function uses conservative vars
+            uL = w2u(wL)
+            uR = w2u(wR)
         end if
-        ! Flux function uses conservative vars
-        uL = w2u(wL)
-        uR = w2u(wR)
-
-         !------------------------------------------------------------
+        
+        !------------------------------------------------------------
         !  (1) Roe flux
         !------------------------------------------------------------
         if(trim(inviscid_flux)=="roe") then
+            if (low_mach_correction) then
+                if (present(uR2L) .and. present(uR2R)) then
+                    call roe_low_mach(uL,uR,uR2L,uR2R,n12,num_flux,wsn)
+            !         write(*,*) "UR2L = ", uR2L, "UR2R = ", uR2R
+            !         write(*,*) "Low Mach:", num_flux(:)
+            !         write(*,*) "Low Mach WSN:", wsn
+                else
+                    write(*,*) "uR2L and/or uR2R not present. Stop!"
+                    stop
+                end if
+            else
+                call roe(uL,uR,n12, num_flux,wsn)
+            !     write(*,*) " No Prec:", num_flux(:)
+            !     write(*,*) " No Mach WSN:", wsn
+            !     write(*,*)
 
-            call roe(uL,uR,n12, num_flux,wsn)
-
-        !------------------------------------------------------------
+            end if
+        ! !------------------------------------------------------------
         ! Other fluxes not yet implemneted.
         !------------------------------------------------------------
         else
@@ -74,11 +102,11 @@ module module_flux
     subroutine perturb_flux(u1, u2, gradw1, gradw2, n12, &
                             xc1, yc1, zc1, xc2, yc2, zc2, &
                             xm, ym, zm, phi1, phi2, ivar, perturb_val, side, &
-                            num_flux, wsn )
+                            num_flux, wsn, uR2L, uR2R  )
         use module_common_data     , only : p2, zero
         use module_input_parameter , only : inviscid_flux !name of flux specified as input
-        use module_input_parameter , only : accuracy_order
-        use module_ccfv_data_soln  , only : u2w, w2u      !variable conversion functions  
+        use module_input_parameter , only : accuracy_order, low_mach_correction
+        use module_ccfv_data_soln  , only : u2w, w2u, q2u      !variable conversion functions  
 
         implicit none
 
@@ -92,6 +120,7 @@ module module_flux
         integer,                    intent(in) :: ivar, side        ! Variable to be perturbed
         real(p2),                   intent(in) :: perturb_val       ! Size of perturbation
         real(p2),                   intent(in) :: phi1, phi2        ! Limiter
+        real(p2), optional,         intent(in) :: uR2L, uR2R        ! preconditioner scaling factor
 
         ! Output
         real(p2), dimension(5),     intent(out) :: num_flux         ! Output
@@ -99,35 +128,87 @@ module module_flux
 
         ! Local Vars
         real(p2), dimension(5) :: w1, w2 ! Primitive vars at centroids
-        real(p2), dimension(5) :: wL, wR ! primitive vars reconstructed to face
+        real(p2), dimension(5) :: wL, wR, qL, qR ! primitive vars reconstructed to face
         real(p2), dimension(5) :: uL, uR ! conservative vars computed from wL and wR
+        real(p2)               :: uR2L_pert, uR2R_pert
+        real(p2)               :: epsilon = 10e-05_p2 ! isn't that just 1e-04?
+        
 
-        w1 = u2w(u1)
-        w2 = u2w(u2)
-        ! Linear reconstruction
-        if (accuracy_order == 2) then
-            wL = w1 + phi1 * ( gradw1(1,:)*(xm-xc1) + gradw1(2,:)*(ym-yc1) + gradw1(3,:)*(zm-zc1) )
-            wR = w2 + phi2 * ( gradw2(1,:)*(xm-xc2) + gradw2(2,:)*(ym-yc2) + gradw2(3,:)*(zm-zc2) )
+        if (low_mach_correction) then !(q1 = u1, q2 = u2)
+            if (accuracy_order == 2) then
+                qL = u1 + phi1 * ( gradw1(1,:)*(xm-xc1) + gradw1(2,:)*(ym-yc1) + gradw1(3,:)*(zm-zc1) ) ! gradq <=> gradw (var) 
+                qR = u2 + phi2 * ( gradw2(1,:)*(xm-xc2) + gradw2(2,:)*(ym-yc2) + gradw2(3,:)*(zm-zc2) ) ! u <=> q (vars)
+            else
+                qL = u1 
+                qR = u2
+            end if
+            if (side == 1) then
+                qL(ivar) = qL(ivar) + perturb_val
+                if (sqrt(qL(2)**2 + qL(3)**2 + qL(4)**2) < epsilon * qL(5)) then
+                    uR2L_pert = (epsilon * qL(5))**2
+                 elseif (sqrt(qL(2)**2 + qL(3)**2 + qL(4)**2) < qL(5)) then
+                    uR2L_pert = qL(2)**2 + qL(3)**2 + qL(4)**2
+                 else
+                    uR2L_pert = qL(5)**2
+                 endif
+                uR2R_pert = uR2R
+            else if (side == 2) then
+                qR(ivar) = qR(ivar) + perturb_val
+                if (sqrt(qR(2)**2 + qR(3)**2 + qR(4)**2) < epsilon * qR(5)) then
+                    uR2R_pert = (epsilon * qR(5))**2
+                 elseif (sqrt(qR(2)**2 + qR(3)**2 + qR(4)**2) < qR(5)) then
+                    uR2R_pert = qR(2)**2 + qR(3)**2 + qR(4)**2
+                 else
+                    uR2R_pert = qR(5)**2
+                 endif
+                 uR2L_pert = uR2L
+            end if
+            uL = q2u(qL)
+            uR = q2u(qR)
         else
-            wL = w1
-            wR = w2
+            w1 = u2w(u1)
+            w2 = u2w(u2)
+            ! Linear reconstruction
+            if (accuracy_order == 2) then
+                wL = w1 + phi1 * ( gradw1(1,:)*(xm-xc1) + gradw1(2,:)*(ym-yc1) + gradw1(3,:)*(zm-zc1) )
+                wR = w2 + phi2 * ( gradw2(1,:)*(xm-xc2) + gradw2(2,:)*(ym-yc2) + gradw2(3,:)*(zm-zc2) )
+            else
+                wL = w1
+                wR = w2
+            end if
+            ! Flux function uses conservative vars
+            uL = w2u(wL)
+            uR = w2u(wR)
+            if (side == 1) then
+                uL(ivar) = uL(ivar) + perturb_val
+            else if (side == 2) then
+                uR(ivar) = uR(ivar) + perturb_val
+            end if
         end if
-        ! Flux function uses conservative vars
-        uL = w2u(wL)
-        uR = w2u(wR)
 
-        if (side == 1) then
-            uL(ivar) = uL(ivar) + perturb_val
-        else if (side == 2) then
-            uR(ivar) = uR(ivar) + perturb_val
-        end if
+        
 
         !------------------------------------------------------------
         !  (1) Roe flux
         !------------------------------------------------------------
         if(trim(inviscid_flux)=="roe") then
+            if (low_mach_correction) then
+                if (present(uR2L) .and. present(uR2R)) then
+                    call roe_low_mach(uL,uR,uR2L_pert,uR2R_pert,n12,num_flux,wsn)
+            !         write(*,*) "UR2L = ", uR2L, "UR2R = ", uR2R
+            !         write(*,*) "Low Mach:", num_flux(:)
+            !         write(*,*) "Low Mach WSN:", wsn
+                else
+                    write(*,*) "uR2L and/or uR2R not present. Stop!"
+                    stop
+                end if
+            else
+                call roe(uL,uR,n12, num_flux,wsn)
+            !     write(*,*) " No Prec:", num_flux(:)
+            !     write(*,*) " No Mach WSN:", wsn
+            !     write(*,*)
 
-            call roe(uL,uR,n12, num_flux,wsn)
+            end if
 
         !------------------------------------------------------------
         ! Other fluxes not yet implemneted.
@@ -813,7 +894,7 @@ module module_flux
                 + ws(3)*LdU(3)*R(:,3) + ws(4)*LdU(4)*R(:,4)
        
         ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
-       
+        ! write(*,*) "Normal:", diss
         num_flux = half * (fL + fR - diss)
        
         ! Max wave speed normal to the face:
@@ -821,4 +902,176 @@ module module_flux
        
         end subroutine roe
         !--------------------------------------------------------------------------------
+
+        subroutine roe_low_mach(ucL, ucR, uR2L, uR2R, njk, num_flux,wsn)
+            ! Modified form of Roe's difference splitting method based off of https://doi.org/10.2514/3.12946
+
+            use module_common_data, only : p2, one, two, half, zero
+            use module_ccfv_data_soln , only : gamma
+            use module_input_parameter, only : eig_limiting_factor
+           
+            implicit none
+           
+            !Input
+            real(p2), dimension(5), intent( in) :: ucL !Left  state in conservative variables.
+            real(p2), dimension(5), intent( in) :: ucR !Right state in conservative variables.
+            real(p2),               intent( in) :: uR2L, uR2R ! Left and right scaling terms
+            real(p2), dimension(3), intent( in) :: njk
+           
+            !Output
+            real(p2), dimension(5)  , intent(out) :: num_flux !Numerical viscous flux
+            real(p2),                 intent(out) :: wsn      !Max wave speed
+           
+            !Local variables
+            !            L = Left
+            !            R = Right
+            ! No subscript = Roe average
+           
+            real(p2) :: nx, ny, nz             ! Normal vector components
+            real(p2) :: uL, uR, vL, vR, wL, wR ! Velocity components.
+            real(p2) :: rhoL, rhoR, pL, pR     ! Primitive variables.
+            real(p2) :: qnL, qnR               ! Normal velocities
+            real(p2) :: aL, aR, HL, HR         ! Speed of sound, Total enthalpy
+            real(p2), dimension(5)   :: fL     ! Physical flux evaluated at ucL
+            real(p2), dimension(5)   :: fR     ! Physical flux evaluated at ucR
+           
+            real(p2) :: RT                     ! RT = sqrt(rhoR/rhoL)
+            real(p2) :: rho,u,v,w,H,a,qn,p     ! Roe-averages
+           
+            real(p2) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
+            real(p2) :: drhou, drhov, drhow, drhoE ! Differences in conserved vars
+            real(p2) :: absU
+            real(p2) :: uprime, cprime, alpha, beta, uR2
+            real(p2) :: cstar, Mstar, delu, delp
+            real(p2), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
+            real(p2) :: du, dv, dw             ! Velocity differences
+            real(p2), dimension(4)   :: ws     ! Wave speeds
+            real(p2), dimension(4)   :: dws    ! Width of a parabolic fit for entropy fix
+            real(p2), dimension(5,4) :: R      ! Right-eigenvector matrix
+            real(p2), dimension(5)   :: diss   ! Dissipation term
+           
+            real(p2), dimension(3,5) :: diss_cartesian
+
+            integer  :: i
+           
+            ! Face normal vector (unit vector)
+           
+            nx = njk(1)
+            ny = njk(2)
+            nz = njk(3)
+           
+            !Primitive and other variables.
+            
+            !  Left state
+           
+               rhoL = ucL(1)
+                 uL = ucL(2)/ucL(1)
+                 vL = ucL(3)/ucL(1)
+                 wL = ucL(4)/ucL(1)
+                qnL = uL*nx + vL*ny + wL*nz
+                 pL = (gamma-one)*( ucL(5) - half*rhoL*(uL*uL+vL*vL+wL*wL) )
+                 aL = sqrt(gamma*pL/rhoL)
+                 HL = aL*aL/(gamma-one) + half*(uL*uL+vL*vL+wL*wL)
+           
+            !  Right state
+           
+               rhoR = ucR(1)
+                 uR = ucR(2)/ucR(1)
+                 vR = ucR(3)/ucR(1)
+                 wR = ucR(4)/ucR(1)
+                qnR = uR*nx + vR*ny + wR*nz
+                 pR = (gamma-one)*( ucR(5) - half*rhoR*(uR*uR+vR*vR+wR*wR) )
+                 aR = sqrt(gamma*pR/rhoR)
+                 HR = aR*aR/(gamma-one) + half*(uR*uR+vR*vR+wR*wR)
+           
+            !Compute the physical flux: fL = Fn(UL) and fR = Fn(UR)
+           
+            fL(1) = rhoL*qnL
+            fL(2) = rhoL*qnL * uL + pL*nx
+            fL(3) = rhoL*qnL * vL + pL*ny
+            fL(4) = rhoL*qnL * wL + pL*nz
+            fL(5) = rhoL*qnL * HL
+        
+            fR(1) = rhoR*qnR
+            fR(2) = rhoR*qnR * uR + pR*nx
+            fR(3) = rhoR*qnR * vR + pR*ny
+            fR(4) = rhoR*qnR * wR + pR*nz
+            fR(5) = rhoR*qnR * HR
+           
+            !First compute the arithmetic-averaged quantities
+            
+              rho = half * (rhoR + rhoL)                           !Arithemtic-averaged density
+                u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
+                v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
+                w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
+                H = half * (HL   + HR  )                           !Arithemtic-averaged total enthalpy
+                p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
+                a = sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
+               qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
+              uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
+
+
+            ! Roe averages
+            ! RT = sqrt(rhoR/rhoL)
+            ! rho = RT*rhoL                                        !Roe-averaged density
+            ! u = (uL + RT*uR)/(one + RT)                        !Roe-averaged x-velocity
+            ! v = (vL + RT*vR)/(one + RT)                        !Roe-averaged y-velocity
+            ! w = (wL + RT*wR)/(one + RT)                        !Roe-averaged z-velocity
+            ! H = (HL + RT*HR)/(one + RT)                        !Roe-averaged total enthalpy
+            ! a = sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Roe-averaged speed of sound
+            ! qn = u*nx + v*ny + w*nz                             !Roe-averaged face-normal velocity
+            ! uR2 = a**2
+
+            !Wave Strengths
+           
+              drho = rhoR - rhoL !Density difference
+                dp =   pR - pL   !Pressure difference
+               dqn =  qnR - qnL  !Normal velocity difference (= delta_u in Weiss and Smith)
+
+               drhou = ucR(2) - ucL(2)
+               drhov = ucR(3) - ucL(3)
+               drhow = ucR(4) - ucL(4)
+               drhoE = ucR(5) - ucL(5)
+               absU  = abs(qn)
+            !    ! Entropy fix? I guess not....... Need to investigate more
+            !     if (absU < 0.1_p2 * a) then
+            !         ! if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
+            !         absU  = half * ( (absU**2)/(0.2_p2*a) + (0.2_p2*a) ) 
+            !     end if
+
+                beta = rho/(gamma*p)
+               alpha = half * (one-beta*uR2)
+            !    alpha = zero
+              cprime = sqrt((alpha**2) * (qn**2) + uR2)
+              uprime = qn * (one - alpha)
+
+               cstar = half * (abs(uprime + cprime) + abs(uprime - cprime))
+               Mstar = half * (abs(uprime + cprime) - abs(uprime - cprime)) / cprime
+
+                delu = Mstar*dqn + (cstar - (one-two*alpha)*absU - alpha*qn*Mstar)*(dp/(rho*uR2))
+                delp = Mstar*dp  + (cstar - absU + alpha*qn*Mstar) * rho * dqn
+
+            diss_cartesian(:,1) = (absU * drho + delu * rho) * njk
+            diss_cartesian(:,2) = (absU * drhou + delu * rho * u) * njk
+            diss_cartesian(:,3) = (absU * drhov + delu * rho * v) * njk
+            diss_cartesian(:,4) = (absU * drhow + delu * rho * w) * njk
+            diss_cartesian(:,5) = (absU * drhoE + delu * rho * H) * njk
+
+            diss = matmul(transpose(diss_cartesian),njk)  ! compute the component normal to the face to get the actual flux
+
+            ! now add the final term
+            ! diss(1) += 0
+            diss(2) = diss(2) + delp * nx
+            diss(3) = diss(3) + delp * ny
+            diss(4) = diss(4) + delp * nz
+            diss(5) = diss(5) + delp * qn
+
+            ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - GAMMA|An|(WR-WL) ]
+            ! write(*,*) "Low-Ma:", diss
+            num_flux = half * (fL + fR - diss)
+           
+            ! Max wave speed normal to the face:
+            ! wsn = max(abs(uprime) + cprime,abs(qn)+a)
+            wsn = abs(uprime) + cprime
+            end subroutine roe_low_mach
 end module module_flux

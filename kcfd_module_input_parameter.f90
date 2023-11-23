@@ -24,6 +24,7 @@ module module_input_parameter
     real(p2) ::    M_inf = 0.3_p2        ! Freestream Mach number
     real(p2) ::      aoa = 0.0_p2        ! Angle of attack in degrees (x --> z)
     real(p2) :: sideslip = 0.0_p2        ! Sideslip angle in degrees (x --> y)
+    real(p2) :: gauge_pressure = 0.0_p2
   
   ! Scheme/solver parameters
     real(p2)               :: CFL                    = 0.5_p2
@@ -62,6 +63,7 @@ module module_input_parameter
     real(p2) :: Pr = 0.72 ! Prandtl number for sea-level air
     real(p2) :: Reynolds = 1.6e6 ! Freestream Reynolds number
     real(p2) :: C_0 = 110.5 ! degK Sutherland's constant (or something like that...) for air
+    logical  :: low_mach_correction = .false. ! use preconditioning for flows with a low mach number
   
   ! End of Default input values
   !-------------------------------------------------------------------------
@@ -106,7 +108,9 @@ module module_input_parameter
     CFL_steps            , &
     jacobian_method      , &
     grid_type            , &
-    visc_flux_method
+    visc_flux_method     , &
+    low_mach_correction  , &
+    gauge_pressure
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)

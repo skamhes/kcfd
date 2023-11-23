@@ -128,213 +128,638 @@
 !********************************************************************************
  subroutine roe_ddt(ucL, ucR, njk, num_flux,dFdU,wsn)
 
- use derivative_data_df5
-
- implicit none
- integer , parameter :: p2 = selected_real_kind(15) ! Double precision
-
-!Input
- type(derivative_data_type_df5), dimension(5), intent( in) :: ucL
- type(derivative_data_type_df5), dimension(5), intent( in) :: ucR
- real(p2)                      , dimension(3), intent( in) :: njk
-
-!Output
- real(p2), dimension(5)  , intent(out) :: num_flux !Numerical viscous flux
- real(p2), dimension(5,5), intent(out) :: dFdU     !Numerical viscous flux Jacobian
- real(p2),                 intent(out) :: wsn      ! Max wave speed
-
-!Some constants
- real(p2) ::    zero = 0.00_p2
- real(p2) ::     one = 1.00_p2
- real(p2) ::     two = 2.00_p2
- real(p2) ::    half = 0.50_p2
- real(p2) ::   gamma = 1.40_p2                 ! Ratio of specific heats
-
-!Local variables
-!
-!            L = Left
-!            R = Right
-! No subscript = Roe average
-
- type(derivative_data_type_df5), dimension(5) :: numerical_flux !Numerical flux in ddt
- real(p2)                       :: nx, ny, nz             ! Normal vector components
-
- type(derivative_data_type_df5) :: uL, uR, vL, vR, wL, wR ! Velocity components.
- type(derivative_data_type_df5) :: rhoL, rhoR, pL, pR     ! Primitive variables.
- type(derivative_data_type_df5) :: qnL, qnR               ! Normal velocities
- type(derivative_data_type_df5) :: aL, aR, HL, HR         ! Speed of sound, Total enthalpy
- type(derivative_data_type_df5), dimension(5)   :: fL     ! Physical flux evaluated at ucL
- type(derivative_data_type_df5), dimension(5)   :: fR     ! Physical flux evaluated at ucR
-
- type(derivative_data_type_df5) :: RT                     ! RT = sqrt(rhoR/rhoL)
- type(derivative_data_type_df5) :: rho,u,v,w,H,a,qn       ! Roe-averages
-
- type(derivative_data_type_df5) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
- type(derivative_data_type_df5), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
- type(derivative_data_type_df5) :: du, dv, dw             ! Velocity differences
- type(derivative_data_type_df5), dimension(4)   :: ws     ! Wave speeds
- type(derivative_data_type_df5), dimension(4)   :: dws    ! Width of a parabolic fit for entropy fix
- type(derivative_data_type_df5), dimension(5,4) :: R      ! Right-eigenvector matrix
- type(derivative_data_type_df5), dimension(5)   :: diss   ! Dissipation term
-
- type(derivative_data_type_df5) :: temp
- integer                        :: i, j
-
-! Face normal vector (unit vector)
-
-  nx = njk(1)
-  ny = njk(2)
-  nz = njk(3)
-
-!Primitive and other variables.
-
-!  Left state
-
-    rhoL = ucL(1)
-      uL = ucL(2)/ucL(1)
-      vL = ucL(3)/ucL(1)
-      wL = ucL(4)/ucL(1)
-     qnL = uL*nx + vL*ny + wL*nz
-      pL = (gamma-one)*( ucL(5) - half*rhoL*(uL*uL+vL*vL+wL*wL) )
-      aL = ddt_sqrt(gamma*pL/rhoL)
-      HL = aL*aL/(gamma-one) + half*(uL*uL+vL*vL+wL*wL)
-
-!  Right state
-
-    rhoR = ucR(1)
-      uR = ucR(2)/ucR(1)
-      vR = ucR(3)/ucR(1)
-      wR = ucR(4)/ucR(1)
-     qnR = uR*nx + vR*ny + wR*nz
-      pR = (gamma-one)*( ucR(5) - half*rhoR*(uR*uR+vR*vR+wR*wR) )
-      aR = ddt_sqrt(gamma*pR/rhoR)
-      HR = aR*aR/(gamma-one) + half*(uR*uR+vR*vR+wR*wR)
-
-!Compute the physical flux: fL = Fn(UL) and fR = Fn(UR)
-
-  fL(1) = rhoL*qnL
-  fL(2) = rhoL*qnL * uL + pL*nx
-  fL(3) = rhoL*qnL * vL + pL*ny
-  fL(4) = rhoL*qnL * wL + pL*nz
-  fL(5) = rhoL*qnL * HL
-
-  fR(1) = rhoR*qnR
-  fR(2) = rhoR*qnR * uR + pR*nx
-  fR(3) = rhoR*qnR * vR + pR*ny
-  fR(4) = rhoR*qnR * wR + pR*nz
-  fR(5) = rhoR*qnR * HR
-
-!First compute the Roe-averaged quantities
-
-!  NOTE: See http://www.cfdnotes.com/cfdnotes_roe_averaged_density.html for
-!        the Roe-averaged density.
-
-    RT = ddt_sqrt(rhoR/rhoL)
-   rho = RT*rhoL                                            !Roe-averaged density
-     u = (uL + RT*uR)/(one + RT)                            !Roe-averaged x-velocity
-     v = (vL + RT*vR)/(one + RT)                            !Roe-averaged y-velocity
-     w = (wL + RT*wR)/(one + RT)                            !Roe-averaged z-velocity
-     H = (HL + RT*HR)/(one + RT)                            !Roe-averaged total enthalpy
-     a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Roe-averaged speed of sound
-    qn = u*nx + v*ny + w*nz                                 !Roe-averaged face-normal velocity
-
-!Wave Strengths
-
-   drho = rhoR - rhoL !Density difference
-     dp =   pR - pL   !Pressure difference
-    dqn =  qnR - qnL  !Normal velocity difference
-
-  LdU(1) = (dp - rho*a*dqn )/(two*a*a) !Left-moving acoustic wave strength
-  LdU(2) =  drho - dp/(a*a)            !Entropy wave strength
-  LdU(3) = (dp + rho*a*dqn )/(two*a*a) !Right-moving acoustic wave strength
-  LdU(4) = rho                         !Shear wave strength (not really, just a factor)
-
-!Absolute values of the wave Speeds
-
-  ws(1) = ddt_abs(qn-a) !Left-moving acoustic wave
-  ws(2) = ddt_abs(qn)   !Entropy wave
-  ws(3) = ddt_abs(qn+a) !Right-moving acoustic wave
-  ws(4) = ddt_abs(qn)   !Shear waves
-
-! Harten's Entropy Fix JCP(1983), 49, pp357-393. This is typically applied
-! only for the nonlinear fields (k=1 and 3), but here it is applied to all
-! for robustness, avoiding vanishing wave speeds by making a parabolic fit
-! near ws = 0 for all waves.
-
-  do i = 1, 4
-   dws(i) = 0.2_p2*a
-   if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
-  end do
-
-!Right Eigenvectors
-!Note: Two shear wave components are combined into one, so that tangent vectors
-!      are not required. And that's why there are only 4 vectors here.
-!      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
-
-! Left-moving acoustic wave
-  R(1,1) = one    
-  R(2,1) = u - a*nx
-  R(3,1) = v - a*ny
-  R(4,1) = w - a*nz
-  R(5,1) = H - a*qn
-
-! Entropy wave
-  R(1,2) = one
-  R(2,2) = u
-  R(3,2) = v 
-  R(4,2) = w
-  R(5,2) = half*(u*u + v*v + w*w)
-
-! Right-moving acoustic wave
-  R(1,3) = one
-  R(2,3) = u + a*nx
-  R(3,3) = v + a*ny
-  R(4,3) = w + a*nz
-  R(5,3) = H + a*qn
-
-! Two shear wave components combined into one (wave strength incorporated).
-  du = uR - uL
-  dv = vR - vL
-  dw = wR - wL
-  R(1,4) = zero
-  R(2,4) = du - dqn*nx
-  R(3,4) = dv - dqn*ny
-  R(4,4) = dw - dqn*nz
-  R(5,4) = u*du + v*dv + w*dw - qn*dqn
-
-!Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
-
- diss(:) = ws(1)*LdU(1)*R(:,1) + ws(2)*LdU(2)*R(:,2) &
-         + ws(3)*LdU(3)*R(:,3) + ws(4)*LdU(4)*R(:,4)
-
-! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
-
-  numerical_flux = half * (fL + fR - diss)
-
-!--------------
-! Output
-
-   ! Normal max wave speed
-    temp = ddt_abs(qn) + a
-     wsn = temp%f
-
-  do i = 1, 5
-
-   !Numerical flux
-    num_flux(i) = numerical_flux(i)%f
-
-   do j = 1, 5
-
-     !Flux derivative
-      dFdU(i,j) = numerical_flux(i)%df(j)
-
+  use derivative_data_df5
+ 
+  implicit none
+  integer , parameter :: p2 = selected_real_kind(15) ! Double precision
+ 
+ !Input
+  type(derivative_data_type_df5), dimension(5), intent( in) :: ucL
+  type(derivative_data_type_df5), dimension(5), intent( in) :: ucR
+  real(p2)                      , dimension(3), intent( in) :: njk
+ 
+ !Output
+  real(p2), dimension(5)  , intent(out) :: num_flux !Numerical viscous flux
+  real(p2), dimension(5,5), intent(out) :: dFdU     !Numerical viscous flux Jacobian
+  real(p2),                 intent(out) :: wsn      ! Max wave speed
+ 
+ !Some constants
+  real(p2) ::    zero = 0.00_p2
+  real(p2) ::     one = 1.00_p2
+  real(p2) ::     two = 2.00_p2
+  real(p2) ::    half = 0.50_p2
+  real(p2) ::   gamma = 1.40_p2                 ! Ratio of specific heats
+ 
+ !Local variables
+ !
+ !            L = Left
+ !            R = Right
+ ! No subscript = Roe average
+ 
+  type(derivative_data_type_df5), dimension(5) :: numerical_flux !Numerical flux in ddt
+  real(p2)                       :: nx, ny, nz             ! Normal vector components
+ 
+  type(derivative_data_type_df5) :: uL, uR, vL, vR, wL, wR ! Velocity components.
+  type(derivative_data_type_df5) :: rhoL, rhoR, pL, pR     ! Primitive variables.
+  type(derivative_data_type_df5) :: qnL, qnR               ! Normal velocities
+  type(derivative_data_type_df5) :: aL, aR, HL, HR         ! Speed of sound, Total enthalpy
+  type(derivative_data_type_df5), dimension(5)   :: fL     ! Physical flux evaluated at ucL
+  type(derivative_data_type_df5), dimension(5)   :: fR     ! Physical flux evaluated at ucR
+ 
+  type(derivative_data_type_df5) :: RT                     ! RT = sqrt(rhoR/rhoL)
+  type(derivative_data_type_df5) :: rho,u,v,w,H,a,qn       ! Roe-averages
+ 
+  type(derivative_data_type_df5) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
+  type(derivative_data_type_df5), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
+  type(derivative_data_type_df5) :: du, dv, dw             ! Velocity differences
+  type(derivative_data_type_df5), dimension(4)   :: ws     ! Wave speeds
+  type(derivative_data_type_df5), dimension(4)   :: dws    ! Width of a parabolic fit for entropy fix
+  type(derivative_data_type_df5), dimension(5,4) :: R      ! Right-eigenvector matrix
+  type(derivative_data_type_df5), dimension(5)   :: diss   ! Dissipation term
+ 
+  type(derivative_data_type_df5) :: temp
+  integer                        :: i, j
+ 
+ ! Face normal vector (unit vector)
+ 
+   nx = njk(1)
+   ny = njk(2)
+   nz = njk(3)
+ 
+ !Primitive and other variables.
+ 
+ !  Left state
+ 
+     rhoL = ucL(1)
+       uL = ucL(2)/ucL(1)
+       vL = ucL(3)/ucL(1)
+       wL = ucL(4)/ucL(1)
+      qnL = uL*nx + vL*ny + wL*nz
+       pL = (gamma-one)*( ucL(5) - half*rhoL*(uL*uL+vL*vL+wL*wL) )
+       aL = ddt_sqrt(gamma*pL/rhoL)
+       HL = aL*aL/(gamma-one) + half*(uL*uL+vL*vL+wL*wL)
+ 
+ !  Right state
+ 
+     rhoR = ucR(1)
+       uR = ucR(2)/ucR(1)
+       vR = ucR(3)/ucR(1)
+       wR = ucR(4)/ucR(1)
+      qnR = uR*nx + vR*ny + wR*nz
+       pR = (gamma-one)*( ucR(5) - half*rhoR*(uR*uR+vR*vR+wR*wR) )
+       aR = ddt_sqrt(gamma*pR/rhoR)
+       HR = aR*aR/(gamma-one) + half*(uR*uR+vR*vR+wR*wR)
+ 
+ !Compute the physical flux: fL = Fn(UL) and fR = Fn(UR)
+ 
+   fL(1) = rhoL*qnL
+   fL(2) = rhoL*qnL * uL + pL*nx
+   fL(3) = rhoL*qnL * vL + pL*ny
+   fL(4) = rhoL*qnL * wL + pL*nz
+   fL(5) = rhoL*qnL * HL
+ 
+   fR(1) = rhoR*qnR
+   fR(2) = rhoR*qnR * uR + pR*nx
+   fR(3) = rhoR*qnR * vR + pR*ny
+   fR(4) = rhoR*qnR * wR + pR*nz
+   fR(5) = rhoR*qnR * HR
+ 
+ !First compute the Roe-averaged quantities
+ 
+ !  NOTE: See http://www.cfdnotes.com/cfdnotes_roe_averaged_density.html for
+ !        the Roe-averaged density.
+ 
+     RT = ddt_sqrt(rhoR/rhoL)
+    rho = RT*rhoL                                            !Roe-averaged density
+      u = (uL + RT*uR)/(one + RT)                            !Roe-averaged x-velocity
+      v = (vL + RT*vR)/(one + RT)                            !Roe-averaged y-velocity
+      w = (wL + RT*wR)/(one + RT)                            !Roe-averaged z-velocity
+      H = (HL + RT*HR)/(one + RT)                            !Roe-averaged total enthalpy
+      a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Roe-averaged speed of sound
+     qn = u*nx + v*ny + w*nz                                 !Roe-averaged face-normal velocity
+ 
+ !Wave Strengths
+ 
+    drho = rhoR - rhoL !Density difference
+      dp =   pR - pL   !Pressure difference
+     dqn =  qnR - qnL  !Normal velocity difference
+ 
+   LdU(1) = (dp - rho*a*dqn )/(two*a*a) !Left-moving acoustic wave strength
+   LdU(2) =  drho - dp/(a*a)            !Entropy wave strength
+   LdU(3) = (dp + rho*a*dqn )/(two*a*a) !Right-moving acoustic wave strength
+   LdU(4) = rho                         !Shear wave strength (not really, just a factor)
+ 
+ !Absolute values of the wave Speeds
+ 
+   ws(1) = ddt_abs(qn-a) !Left-moving acoustic wave
+   ws(2) = ddt_abs(qn)   !Entropy wave
+   ws(3) = ddt_abs(qn+a) !Right-moving acoustic wave
+   ws(4) = ddt_abs(qn)   !Shear waves
+ 
+ ! Harten's Entropy Fix JCP(1983), 49, pp357-393. This is typically applied
+ ! only for the nonlinear fields (k=1 and 3), but here it is applied to all
+ ! for robustness, avoiding vanishing wave speeds by making a parabolic fit
+ ! near ws = 0 for all waves.
+ 
+   do i = 1, 4
+    dws(i) = 0.2_p2*a
+    if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
    end do
+ 
+ !Right Eigenvectors
+ !Note: Two shear wave components are combined into one, so that tangent vectors
+ !      are not required. And that's why there are only 4 vectors here.
+ !      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
+ 
+ ! Left-moving acoustic wave
+   R(1,1) = one    
+   R(2,1) = u - a*nx
+   R(3,1) = v - a*ny
+   R(4,1) = w - a*nz
+   R(5,1) = H - a*qn
+ 
+ ! Entropy wave
+   R(1,2) = one
+   R(2,2) = u
+   R(3,2) = v 
+   R(4,2) = w
+   R(5,2) = half*(u*u + v*v + w*w)
+ 
+ ! Right-moving acoustic wave
+   R(1,3) = one
+   R(2,3) = u + a*nx
+   R(3,3) = v + a*ny
+   R(4,3) = w + a*nz
+   R(5,3) = H + a*qn
+ 
+ ! Two shear wave components combined into one (wave strength incorporated).
+   du = uR - uL
+   dv = vR - vL
+   dw = wR - wL
+   R(1,4) = zero
+   R(2,4) = du - dqn*nx
+   R(3,4) = dv - dqn*ny
+   R(4,4) = dw - dqn*nz
+   R(5,4) = u*du + v*dv + w*dw - qn*dqn
+ 
+ !Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
+ 
+  diss(:) = ws(1)*LdU(1)*R(:,1) + ws(2)*LdU(2)*R(:,2) &
+          + ws(3)*LdU(3)*R(:,3) + ws(4)*LdU(4)*R(:,4)
+ 
+ ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
+ 
+   numerical_flux = half * (fL + fR - diss)
+ 
+ !--------------
+ ! Output
+ 
+    ! Normal max wave speed
+     temp = ddt_abs(qn) + a
+      wsn = temp%f
+ 
+   do i = 1, 5
+ 
+    !Numerical flux
+     num_flux(i) = numerical_flux(i)%f
+ 
+    do j = 1, 5
+ 
+      !Flux derivative
+       dFdU(i,j) = numerical_flux(i)%df(j)
+ 
+    end do
+ 
+   end do
+ 
+  end subroutine roe_ddt
+ !--------------------------------------------------------------------------------
 
-  end do
+  subroutine roe_low_mach_ddt(ucL, ucR, uR2L, uR2R, njk, num_flux,dFdU,wsn)
 
- end subroutine roe_ddt
-!--------------------------------------------------------------------------------
+    use derivative_data_df5
+   
+    implicit none
+    integer , parameter :: p2 = selected_real_kind(15) ! Double precision
+   
+   !Input
+    type(derivative_data_type_df5), dimension(5), intent( in) :: ucL
+    type(derivative_data_type_df5), dimension(5), intent( in) :: ucR
+    real(p2)                                    , intent( in) :: uR2L, uR2R
+    real(p2)                      , dimension(3), intent( in) :: njk
+   
+   !Output
+    real(p2), dimension(5)  , intent(out) :: num_flux !Numerical viscous flux
+    real(p2), dimension(5,5), intent(out) :: dFdU     !Numerical viscous flux Jacobian
+    real(p2),                 intent(out) :: wsn      ! Max wave speed
+   
+   !Some constants
+    real(p2) ::    zero = 0.00_p2
+    real(p2) ::     one = 1.00_p2
+    real(p2) ::     two = 2.00_p2
+    real(p2) ::    half = 0.50_p2
+    real(p2) ::   gamma = 1.40_p2                 ! Ratio of specific heats
+   
+   !Local variables
+   !
+   !            L = Left
+   !            R = Right
+   ! No subscript = Roe average
+   
+    type(derivative_data_type_df5), dimension(5) :: numerical_flux !Numerical flux in ddt
+    real(p2)                       :: nx, ny, nz             ! Normal vector components
+   
+    type(derivative_data_type_df5) :: uL, uR, vL, vR, wL, wR ! Velocity components.
+    type(derivative_data_type_df5) :: rhoL, rhoR, pL, pR     ! Primitive variables.
+    type(derivative_data_type_df5) :: qnL, qnR               ! Normal velocities
+    type(derivative_data_type_df5) :: aL, aR, HL, HR         ! Speed of sound, Total enthalpy
+    type(derivative_data_type_df5), dimension(5)   :: fL     ! Physical flux evaluated at ucL
+    type(derivative_data_type_df5), dimension(5)   :: fR     ! Physical flux evaluated at ucR
+   
+    type(derivative_data_type_df5) :: RT                     ! RT = sqrt(rhoR/rhoL)
+    type(derivative_data_type_df5) :: rho,u,v,w,H,a,qn,p     ! Roe-averages
+   
+    type(derivative_data_type_df5) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
+    type(derivative_data_type_df5) :: drhou, drhov, drhow, drhoE ! Differences in conserved vars
+    type(derivative_data_type_df5) :: absU
+    type(derivative_data_type_df5) :: uprime, cprime, alpha, beta
+    type(derivative_data_type_df5) :: uR2L_ddt, uR2R_ddt, uR2
+    ! real(p2)                       :: uR2
+    type(derivative_data_type_df5) :: cstar, Mstar, delu, delp
+    type(derivative_data_type_df5), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
+    type(derivative_data_type_df5) :: du, dv, dw             ! Velocity differences
+    type(derivative_data_type_df5), dimension(4)   :: ws     ! Wave speeds
+    type(derivative_data_type_df5), dimension(4)   :: dws    ! Width of a parabolic fit for entropy fix
+    type(derivative_data_type_df5), dimension(5,4) :: R      ! Right-eigenvector matrix
+    type(derivative_data_type_df5), dimension(5)   :: diss   ! Dissipation term
+   
+    type(derivative_data_type_df5) :: temp
+    
+    type(derivative_data_type_df5), dimension(3,5) :: diss_cartesian
+    real(p2) :: epsilon = 10e-05_p2
+    integer                        :: i, j
+   
+   ! Face normal vector (unit vector)
+   
+     nx = njk(1)
+     ny = njk(2)
+     nz = njk(3)
+   
+   !Primitive and other variables.
+   
+   !  Left state
+   
+       rhoL = ucL(1)
+         uL = ucL(2)/ucL(1)
+         vL = ucL(3)/ucL(1)
+         wL = ucL(4)/ucL(1)
+        qnL = uL*nx + vL*ny + wL*nz
+         pL = (gamma-one)*( ucL(5) - half*rhoL*(uL*uL+vL*vL+wL*wL) )
+         aL = ddt_sqrt(gamma*pL/rhoL)
+         HL = aL*aL/(gamma-one) + half*(uL*uL+vL*vL+wL*wL)
+         if (ddt_sqrt(uL*uL + vL*vL + wL*wL) < epsilon * aL) then
+            uR2L_ddt = (epsilon * aL)**2
+         elseif (ddt_sqrt(uL*uL + vL*vL + wL*wL) < aL) then
+            uR2L_ddt = uL*uL + vL*vL + wL*wL
+         else
+            uR2L_ddt = aL**2
+         endif
 
+
+   !  Right state
+   
+       rhoR = ucR(1)
+         uR = ucR(2)/ucR(1)
+         vR = ucR(3)/ucR(1)
+         wR = ucR(4)/ucR(1)
+        qnR = uR*nx + vR*ny + wR*nz
+         pR = (gamma-one)*( ucR(5) - half*rhoR*(uR*uR+vR*vR+wR*wR) )
+         aR = ddt_sqrt(gamma*pR/rhoR)
+         HR = aR*aR/(gamma-one) + half*(uR*uR+vR*vR+wR*wR)
+         if (ddt_sqrt(uR*uR + vR*vR + wR*wR) < epsilon * aR) then
+            uR2R_ddt = (epsilon * aR)**2
+         elseif (ddt_sqrt(uR*uR + vR*vR + wR*wR) < aR) then
+            uR2R_ddt = uR*uR + vR*vR + wR*wR
+         else
+            uR2R_ddt = aR**2
+         endif
+         
+   !Compute the physical flux: fL = Fn(UL) and fR = Fn(UR)
+   
+     fL(1) = rhoL*qnL
+     fL(2) = rhoL*qnL * uL + pL*nx
+     fL(3) = rhoL*qnL * vL + pL*ny
+     fL(4) = rhoL*qnL * wL + pL*nz
+     fL(5) = rhoL*qnL * HL
+   
+     fR(1) = rhoR*qnR
+     fR(2) = rhoR*qnR * uR + pR*nx
+     fR(3) = rhoR*qnR * vR + pR*ny
+     fR(4) = rhoR*qnR * wR + pR*nz
+     fR(5) = rhoR*qnR * HR
+   
+   !First compute the Roe-averaged quantities
+   
+   !  NOTE: See http://www.cfdnotes.com/cfdnotes_roe_averaged_density.html for
+   !        the Roe-averaged density.
+   
+       
+     rho = half * (rhoR + rhoL)                         !Arithemtic-averaged density
+     u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
+     v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
+     w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
+     H = half * (HL   + hR  )                           !Arithemtic-averaged total enthalpy
+     p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
+     a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
+    qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
+  !  uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
+   uR2 = half * (uR2L_ddt + uR2R_ddt)                   !Arithmetic-averaged scaling term
+
+   !Wave Strengths
+   
+      drho = rhoR - rhoL !Density difference
+        dp =   pR - pL   !Pressure difference
+       dqn =  qnR - qnL  !Normal velocity difference
+
+       drhou = ucR(2) - ucL(2)
+       drhov = ucR(3) - ucL(3)
+       drhow = ucR(4) - ucL(4)
+       drhoE = ucR(5) - ucL(5)
+       absU  = ddt_abs(qn)
+
+      ! ! Entropy fix? I guess not....... Need to investigate more
+      ! if (absU < 0.1_p2 * a) then
+      !     ! if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
+      !     absU  = half * ( (absU**2)/(0.2_p2*a) + (0.2_p2*a) ) 
+      ! end if
+      
+        beta = rho/(gamma*p)
+       alpha = half * (one-beta*uR2)
+      cprime = ddt_sqrt((alpha**2) * (qn**2) + uR2)
+      uprime = qn * (one - alpha)
+
+       cstar = half * (ddt_abs(uprime + cprime) + ddt_abs(uprime - cprime))
+       Mstar = half * (ddt_abs(uprime + cprime) - ddt_abs(uprime - cprime)) / cprime
+
+        delu = Mstar*dqn + (cstar - (one-two*alpha)*absU - alpha*qn*Mstar)*(dp/(rho*uR2))
+        delp = Mstar*dp  + (cstar - absU + alpha*qn*Mstar) * rho * dqn
+
+        diss_cartesian(:,1) = (absU * drho + delu * rho) * njk
+        diss_cartesian(:,2) = (absU * drhou + delu * rho * u) * njk
+        diss_cartesian(:,3) = (absU * drhov + delu * rho * v) * njk
+        diss_cartesian(:,4) = (absU * drhow + delu * rho * w) * njk
+        diss_cartesian(:,5) = (absU * drhoE + delu * rho * H) * njk
+
+        ! Equivalent of matrix multiplication for the ddt type
+        diss(1) = diss_cartesian(1,1)*njk(1) + diss_cartesian(2,1)*njk(2) + diss_cartesian(3,1)*njk(3)
+        diss(2) = diss_cartesian(1,2)*njk(1) + diss_cartesian(2,2)*njk(2) + diss_cartesian(3,2)*njk(3)
+        diss(3) = diss_cartesian(1,3)*njk(1) + diss_cartesian(2,3)*njk(2) + diss_cartesian(3,3)*njk(3)
+        diss(4) = diss_cartesian(1,4)*njk(1) + diss_cartesian(2,4)*njk(2) + diss_cartesian(3,4)*njk(3)
+        diss(5) = diss_cartesian(1,5)*njk(1) + diss_cartesian(2,5)*njk(2) + diss_cartesian(3,5)*njk(3)
+
+        ! now add the final term
+        ! diss(1) += 0
+        diss(2) = diss(2) + delp * nx
+        diss(3) = diss(3) + delp * ny
+        diss(4) = diss(4) + delp * nz
+        diss(5) = diss(5) + delp * qn
+
+   ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
+   
+     numerical_flux = half * (fL + fR - diss)
+   
+   !--------------
+   ! Output
+   
+      ! Normal max wave speed
+       temp = ddt_abs(qn) + a
+        wsn = temp%f
+   
+     do i = 1, 5
+   
+      !Numerical flux
+       num_flux(i) = numerical_flux(i)%f
+   
+      do j = 1, 5
+   
+        !Flux derivative
+         dFdU(i,j) = numerical_flux(i)%df(j)
+   
+      end do
+   
+     end do
+ 
+
+    !  write(*,*) 'CONS'
+    !  write(*,*) fL(:)%f
+    !  write(*,*) fR(:)%f
+    !  write(*,*) diss(:)%f
+    !  write(*,*)
+    end subroutine roe_low_mach_ddt
+   !--------------------------------------------------------------------------------
+
+
+    subroutine roe_prim_low_mach_ddt(qcL, qcR, uR2L, uR2R, njk, num_flux,dFdU,wsn)
+
+      use derivative_data_df5
+     
+      implicit none
+      integer , parameter :: p2 = selected_real_kind(15) ! Double precision
+     
+     !Input
+      type(derivative_data_type_df5), dimension(5), intent( in) :: qcL
+      type(derivative_data_type_df5), dimension(5), intent( in) :: qcR
+      real(p2)                                    , intent( in) :: uR2L, uR2R
+      real(p2)                      , dimension(3), intent( in) :: njk
+     
+     !Output
+      real(p2), dimension(5)  , intent(out) :: num_flux !Numerical viscous flux
+      real(p2), dimension(5,5), intent(out) :: dFdU     !Numerical viscous flux Jacobian
+      real(p2),                 intent(out) :: wsn      ! Max wave speed
+     
+     !Some constants
+      real(p2) ::    zero = 0.00_p2
+      real(p2) ::     one = 1.00_p2
+      real(p2) ::     two = 2.00_p2
+      real(p2) ::    half = 0.50_p2
+      real(p2) ::   gamma = 1.40_p2                 ! Ratio of specific heats
+     
+     !Local variables
+     !
+     !            L = Left
+     !            R = Right
+     ! No subscript = Roe average
+     
+      type(derivative_data_type_df5), dimension(5) :: numerical_flux !Numerical flux in ddt
+      real(p2)                       :: nx, ny, nz             ! Normal vector components
+     
+      type(derivative_data_type_df5) :: uL, uR, vL, vR, wL, wR ! Velocity components.
+      type(derivative_data_type_df5) :: rhoL, rhoR, pL, pR     ! Primitive variables.
+      type(derivative_data_type_df5) :: qnL, qnR               ! Normal velocities
+      type(derivative_data_type_df5) :: aL, aR, HL, HR, EL, ER ! Speed of sound, Total enthalpy
+      type(derivative_data_type_df5), dimension(5)   :: fL     ! Physical flux evaluated at ucL
+      type(derivative_data_type_df5), dimension(5)   :: fR     ! Physical flux evaluated at ucR
+     
+      type(derivative_data_type_df5) :: RT                     ! RT = sqrt(rhoR/rhoL)
+      type(derivative_data_type_df5) :: rho,u,v,w,H,a,qn,p     ! Roe-averages
+     
+      type(derivative_data_type_df5) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
+      type(derivative_data_type_df5) :: drhou, drhov, drhow, drhoE ! Differences in conserved vars
+      type(derivative_data_type_df5) :: absU
+      type(derivative_data_type_df5) :: uprime, cprime, alpha, beta
+      real(p2)                       :: uR2
+      type(derivative_data_type_df5) :: cstar, Mstar, delu, delp
+      type(derivative_data_type_df5), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
+      type(derivative_data_type_df5) :: du, dv, dw             ! Velocity differences
+      type(derivative_data_type_df5), dimension(4)   :: ws     ! Wave speeds
+      type(derivative_data_type_df5), dimension(4)   :: dws    ! Width of a parabolic fit for entropy fix
+      type(derivative_data_type_df5), dimension(5,4) :: R      ! Right-eigenvector matrix
+      type(derivative_data_type_df5), dimension(5)   :: diss   ! Dissipation term
+     
+      type(derivative_data_type_df5) :: temp
+      
+      type(derivative_data_type_df5), dimension(3,5) :: diss_cartesian
+      
+      integer                        :: i, j
+     
+     ! Face normal vector (unit vector)
+     
+       nx = njk(1)
+       ny = njk(2)
+       nz = njk(3)
+     
+     !Primitive and other variables.
+     
+     !  Left state
+     
+         rhoL = qcL(1)*gamma/qcL(5)
+           uL = qcL(2)
+           vL = qcL(3)
+           wL = qcL(4)
+          qnL = uL*nx + vL*ny + wL*nz
+           pL = qcL(1)
+           aL = ddt_sqrt(gamma*pL/rhoL)
+           HL = aL*aL/(gamma-one) + half*(uL*uL+vL*vL+wL*wL)
+           EL = qcL(1)/(gamma-one)+half*rhoL*(qcL(2)*qcL(2)+qcL(3)*qcL(3)+qcL(4)*qcL(4))
+     
+     !  Right state
+     
+         rhoR = qcR(1)*gamma/qcR(5)
+           uR = qcR(2)
+           vR = qcR(3)
+           wR = qcR(4)
+          qnR = uR*nx + vR*ny + wR*nz
+           pR = qcR(1)
+           aR = ddt_sqrt(gamma*pR/rhoR)
+           HR = aR*aR/(gamma-one) + half*(uR*uR+vR*vR+wR*wR)
+           ER = qcR(1)/(gamma-one)+half*rhoR*(qcR(2)*qcR(2)+qcR(3)*qcR(3)+qcR(4)*qcR(4))
+     
+     !Compute the physical flux: fL = Fn(UL) and fR = Fn(UR)
+     
+       fL(1) = rhoL*qnL
+       fL(2) = rhoL*qnL * uL + pL*nx
+       fL(3) = rhoL*qnL * vL + pL*ny
+       fL(4) = rhoL*qnL * wL + pL*nz
+       fL(5) = rhoL*qnL * HL
+     
+       fR(1) = rhoR*qnR
+       fR(2) = rhoR*qnR * uR + pR*nx
+       fR(3) = rhoR*qnR * vR + pR*ny
+       fR(4) = rhoR*qnR * wR + pR*nz
+       fR(5) = rhoR*qnR * HR
+     
+     !First compute the Roe-averaged quantities
+     
+     !  NOTE: See http://www.cfdnotes.com/cfdnotes_roe_averaged_density.html for
+     !        the Roe-averaged density.
+     
+         
+       rho = half * (rhoR + rhoL)                           !Arithemtic-averaged density
+       u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
+       v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
+       w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
+       H = half * (HL   + hR  )                           !Arithemtic-averaged total enthalpy
+       p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
+       a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
+      qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
+     uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
+  
+     !Wave Strengths
+     
+        drho = rhoR - rhoL !Density difference
+          dp =   pR - pL   !Pressure difference
+         dqn =  qnR - qnL  !Normal velocity difference
+  
+         drhou = qcR(2)*rhoR - qcL(2)*rhoL
+         drhov = qcR(3)*rhoR - qcL(3)*rhoL
+         drhow = qcR(4)*rhoR - qcL(4)*rhoL
+         drhoE = ER*rhoR - EL*rhoL
+         absU  = ddt_abs(qn)
+  
+          beta = rho/(gamma*p)
+         alpha = half * (one-beta*uR2)
+        cprime = ddt_sqrt((alpha**2) * (qn**2) + uR2)
+        uprime = qn * (one - alpha)
+  
+         cstar = half * (ddt_abs(uprime + cprime) + ddt_abs(uprime - cprime))
+         Mstar = half * (ddt_abs(uprime + cprime) - ddt_abs(uprime - cprime)) / cprime
+  
+          delu = Mstar*dqn + (cstar - (one-two*alpha)*absU - alpha*qn*Mstar)*(dp/(rho*uR2))
+          delp = Mstar*dp  + (cstar - absU + alpha*qn*Mstar) * rho * dqn
+  
+          diss_cartesian(:,1) = (absU * drho + delu * rho) * njk
+          diss_cartesian(:,2) = (absU * drhou + delu * rho * u) * njk
+          diss_cartesian(:,3) = (absU * drhov + delu * rho * v) * njk
+          diss_cartesian(:,4) = (absU * drhow + delu * rho * w) * njk
+          diss_cartesian(:,5) = (absU * drhoE + delu * rho * H) * njk
+  
+          ! Equivalent of matrix multiplication for the ddt type
+          diss(1) = diss_cartesian(1,1)*njk(1) + diss_cartesian(2,1)*njk(2) + diss_cartesian(3,1)*njk(3)
+          diss(2) = diss_cartesian(1,2)*njk(1) + diss_cartesian(2,2)*njk(2) + diss_cartesian(3,2)*njk(3)
+          diss(3) = diss_cartesian(1,3)*njk(1) + diss_cartesian(2,3)*njk(2) + diss_cartesian(3,3)*njk(3)
+          diss(4) = diss_cartesian(1,4)*njk(1) + diss_cartesian(2,4)*njk(2) + diss_cartesian(3,4)*njk(3)
+          diss(5) = diss_cartesian(1,5)*njk(1) + diss_cartesian(2,5)*njk(2) + diss_cartesian(3,5)*njk(3)
+  
+          ! now add the final term
+          ! diss(1) += 0
+          diss(2) = diss(2) + delp * nx
+          diss(3) = diss(3) + delp * ny
+          diss(4) = diss(4) + delp * nz
+          diss(5) = diss(5) + delp * qn
+  
+     ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
+     
+      !  numerical_flux = half * (fL + fR - diss)
+          numerical_flux = (fL + fR)
+     !--------------
+     ! Output
+     
+        ! Normal max wave speed
+         temp = ddt_abs(qn) + a
+          wsn = temp%f
+     
+       do i = 1, 5
+     
+        !Numerical flux
+         num_flux(i) = numerical_flux(i)%f
+     
+        do j = 1, 5
+     
+          !Flux derivative
+           dFdU(i,j) = numerical_flux(i)%df(j)
+     
+        end do
+     
+       end do
+
+      !  write(*,*) 'Prim'
+      !  write(*,*) fL(:)%f
+      !  write(*,*) fR(:)%f
+      !  write(*,*) diss(:)%f
+      !  write(*,*)
+      end subroutine roe_prim_low_mach_ddt
+     !--------------------------------------------------------------------------------
+  
 !********************************************************************************
 !* -- 3D HLL Flux Function and Jacobian --
 !*

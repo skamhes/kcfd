@@ -50,28 +50,44 @@ contains
     subroutine compute_gradient
         use module_common_data   , only : zero, p2
         use module_ccfv_data_grid, only : ncells
-        use module_ccfv_data_soln, only : gradw, w
+        use module_ccfv_data_soln, only : gradw, w, p_inf, gradq, q
+        use module_input_parameter, only: gauge_pressure, low_mach_correction
         
         implicit none
         !real(p2), dimension(3,5,32)   :: local_gradw ! debugging
-        real(p2) :: wi, wk
+        real(p2) :: wi, wk, qi, qk
         integer  :: ivar, i, k, nghbr_cell
-        !type(cc_lsq_data_type), dimension(32) :: local_cclsq
-        !local_cclsq = cclsq
-        cell_loop : do i = 1,ncells
-            var_loop : do ivar = 1,5
-                wi = w(ivar,i)
-                nghbr_loop : do k = 1,cclsq(i)%nnghbrs_lsq
-                    nghbr_cell = cclsq(i)%nghbr_lsq(k)
-                    wk = w(ivar,nghbr_cell)
-                    gradw(1,ivar,i) = gradw(1,ivar,i) + cclsq(i)%cx(k)*(wk-wi)
-                    gradw(2,ivar,i) = gradw(2,ivar,i) + cclsq(i)%cy(k)*(wk-wi)
-                    gradw(3,ivar,i) = gradw(3,ivar,i) + cclsq(i)%cz(k)*(wk-wi)
-                    !local_gradw = gradw
-                end do nghbr_loop
-            end do var_loop
-        end do cell_loop
         
+        if (low_mach_correction) then
+            cell_loop_prim : do i = 1,ncells
+                var_loop_prim : do ivar = 1,5
+                    qi = q(ivar,i)
+                    nghbr_loop_prim : do k = 1,cclsq(i)%nnghbrs_lsq
+                        nghbr_cell = cclsq(i)%nghbr_lsq(k)
+                        qk = q(ivar,nghbr_cell)
+                        gradq(1,ivar,i) = gradq(1,ivar,i) + cclsq(i)%cx(k)*(qk-qi)
+                        gradq(2,ivar,i) = gradq(2,ivar,i) + cclsq(i)%cy(k)*(qk-qi)
+                        gradq(3,ivar,i) = gradq(3,ivar,i) + cclsq(i)%cz(k)*(qk-qi)
+                    end do nghbr_loop_prim
+                end do var_loop_prim
+            end do cell_loop_prim
+        else
+            cell_loop : do i = 1,ncells
+                var_loop : do ivar = 1,5
+                    wi = w(ivar,i)
+                    if (ivar == 5) wi = wi - p_inf + gauge_pressure
+                    nghbr_loop : do k = 1,cclsq(i)%nnghbrs_lsq
+                        nghbr_cell = cclsq(i)%nghbr_lsq(k)
+                        wk = w(ivar,nghbr_cell)
+                        if (ivar == 5) wk = wk - p_inf + gauge_pressure
+                        gradw(1,ivar,i) = gradw(1,ivar,i) + cclsq(i)%cx(k)*(wk-wi)
+                        gradw(2,ivar,i) = gradw(2,ivar,i) + cclsq(i)%cy(k)*(wk-wi)
+                        gradw(3,ivar,i) = gradw(3,ivar,i) + cclsq(i)%cz(k)*(wk-wi)
+                    end do nghbr_loop
+                end do var_loop
+            end do cell_loop
+        end if
+
         ! compute the gradient for each of the primitive variables
     end subroutine compute_gradient
 
@@ -203,12 +219,13 @@ contains
         use module_common_data, only : p2
         use module_ccfv_data_grid, only : ncells
         use module_ccfv_data_soln, only : w, Temp, gamma, gradT
+        
         implicit none
         integer :: i, nghbr_cell, k
     
         ! First we need to compute T
         do i = 1,ncells
-            Temp(i) = w(5,i)*gamma / w(1,i)
+            Temp(i) = w(5,i) * gamma / w(1,i)
         end do
 
         ! Now we use the least squares stuff to calculate the gradient
@@ -324,7 +341,12 @@ contains
                     if (.not.already_added) then
                                             n = cclsq(i)%nnghbrs_lsq + 1
                          cclsq(i)%nnghbrs_lsq = n                    !Increase the size by 1.
-                        call my_alloc_int_ptr(cclsq(i)%nghbr_lsq, n) !Expand the array by 1.
+                        if (n==1) then
+                            if (associated(cclsq(i)%nghbr_lsq)) nullify(cclsq(i)%nghbr_lsq)
+                            allocate(cclsq(i)%nghbr_lsq(1))
+                        else
+                            call my_alloc_int_ptr(cclsq(i)%nghbr_lsq, n) !Expand the array by 1.
+                        end if
                         cclsq(i)%nghbr_lsq(n) = candidate_cell       !Store the candidate.
                     end if
                 end do node2cell_loop
@@ -821,7 +843,6 @@ contains
         endif
       
         ! Shirinking an array is not implemented... Sorry.
-      
         if ( n < size(x) ) then
             write(*,*) "my_alloc_int_ptr received a smaller dimension. Not implemented. Stop."
             stop
