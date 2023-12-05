@@ -338,6 +338,7 @@
   subroutine roe_low_mach_ddt(ucL, ucR, uR2L, uR2R, njk, num_flux,dFdU,wsn)
 
     use derivative_data_df5
+    use module_input_parameter, only : eig_limiting_factor, entropy_fix
    
     implicit none
     integer , parameter :: p2 = selected_real_kind(15) ! Double precision
@@ -345,7 +346,8 @@
    !Input
     type(derivative_data_type_df5), dimension(5), intent( in) :: ucL
     type(derivative_data_type_df5), dimension(5), intent( in) :: ucR
-    real(p2)                                    , intent( in) :: uR2L, uR2R
+    ! type(derivative_data_type_df5)              , intent( in) :: uR2L, uR2R
+    real(p2)              , intent( in) :: uR2L, uR2R
     real(p2)                      , dimension(3), intent( in) :: njk
    
    !Output
@@ -381,7 +383,7 @@
    
     type(derivative_data_type_df5) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
     type(derivative_data_type_df5) :: drhou, drhov, drhow, drhoE ! Differences in conserved vars
-    type(derivative_data_type_df5) :: absU
+    type(derivative_data_type_df5) :: absU, ws2,ws3          ! Convective and +/- accoustic wave speeds
     type(derivative_data_type_df5) :: uprime, cprime, alpha, beta
     type(derivative_data_type_df5) :: uR2L_ddt, uR2R_ddt, uR2
     ! real(p2)                       :: uR2
@@ -417,14 +419,6 @@
          pL = (gamma-one)*( ucL(5) - half*rhoL*(uL*uL+vL*vL+wL*wL) )
          aL = ddt_sqrt(gamma*pL/rhoL)
          HL = aL*aL/(gamma-one) + half*(uL*uL+vL*vL+wL*wL)
-         if (ddt_sqrt(uL*uL + vL*vL + wL*wL) < epsilon * aL) then
-            uR2L_ddt = (epsilon * aL)**2
-         elseif (ddt_sqrt(uL*uL + vL*vL + wL*wL) < aL) then
-            uR2L_ddt = uL*uL + vL*vL + wL*wL
-         else
-            uR2L_ddt = aL**2
-         endif
-
 
    !  Right state
    
@@ -436,13 +430,6 @@
          pR = (gamma-one)*( ucR(5) - half*rhoR*(uR*uR+vR*vR+wR*wR) )
          aR = ddt_sqrt(gamma*pR/rhoR)
          HR = aR*aR/(gamma-one) + half*(uR*uR+vR*vR+wR*wR)
-         if (ddt_sqrt(uR*uR + vR*vR + wR*wR) < epsilon * aR) then
-            uR2R_ddt = (epsilon * aR)**2
-         elseif (ddt_sqrt(uR*uR + vR*vR + wR*wR) < aR) then
-            uR2R_ddt = uR*uR + vR*vR + wR*wR
-         else
-            uR2R_ddt = aR**2
-         endif
          
    !Compute the physical flux: fL = Fn(UL) and fR = Fn(UR)
    
@@ -472,8 +459,8 @@
      p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
      a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
     qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
-  !  uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
-   uR2 = half * (uR2L_ddt + uR2R_ddt)                   !Arithmetic-averaged scaling term
+   uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
+   
 
    !Wave Strengths
    
@@ -486,20 +473,30 @@
        drhow = ucR(4) - ucL(4)
        drhoE = ucR(5) - ucL(5)
        absU  = ddt_abs(qn)
-
-      ! ! Entropy fix? I guess not....... Need to investigate more
-      ! if (absU < 0.1_p2 * a) then
-      !     ! if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
-      !     absU  = half * ( (absU**2)/(0.2_p2*a) + (0.2_p2*a) ) 
-      ! end if
       
         beta = rho/(gamma*p)
        alpha = half * (one-beta*uR2)
       cprime = ddt_sqrt((alpha**2) * (qn**2) + uR2)
       uprime = qn * (one - alpha)
 
-       cstar = half * (ddt_abs(uprime + cprime) + ddt_abs(uprime - cprime))
-       Mstar = half * (ddt_abs(uprime + cprime) - ddt_abs(uprime - cprime)) / cprime
+        ws2 = ddt_abs(uprime + cprime)
+        ws3 = ddt_abs(uprime - cprime)
+
+        ! Entropy fix (?)
+        if (entropy_fix == 'harten') then
+            dws(:) = eig_limiting_factor(1:4)*a
+            if (absU < dws(3))  absU = half * ( (absU**2)/(dws(3)*a) + (dws(3)*a) )
+            if (ws2  < dws(1))  ws2  = half * ( (ws2**2) /(dws(1)*a) + (dws(1)*a) )
+            if (ws3  < dws(2))  ws3  = half * ( (ws3**2) /(dws(2)*a) + (dws(2)*a) )
+        elseif (entropy_fix == 'mavriplis') then
+            ! https://doi.org/10.2514/6.2007-3955
+            absU = ddt_max(absU,eig_limiting_factor(3)*ws2)
+            ! ws2 = max(ws2,eig_limiting_factor(1)*ws2)
+            ws3 = ddt_max(ws3,eig_limiting_factor(1)*ws2)
+        endif
+
+        cstar = half * (ws2 + ws3)
+        Mstar = half * (ws2 - ws3) / cprime
 
         delu = Mstar*dqn + (cstar - (one-two*alpha)*absU - alpha*qn*Mstar)*(dp/(rho*uR2))
         delp = Mstar*dp  + (cstar - absU + alpha*qn*Mstar) * rho * dqn
@@ -1804,4 +1801,111 @@
   end subroutine viscous_alpha_ddt
  !--------------------------------------------------------------------------------
  
+
+  subroutine viscous_flux_primitive(q1,q2,gradq1,gradq2,mu1,mu2,n12,xc1,yc1,zc1,xc2,yc2,zc2, visc_flux)
+    use module_common_data, only : p2, half, one, zero
+    use module_ccfv_data_soln, only : gamma, w2u
+    use module_input_parameter, only : Pr
+    use derivative_data_df5
+
+    implicit none
+
+    type(derivative_data_type_df5), dimension(5),     intent(in) :: q1, q2
+    real(p2), dimension(3,5),       intent(in) :: gradq1, gradq2
+    real(p2),                       intent(in) :: mu1, mu2
+    real(p2), dimension(3),         intent(in) :: n12               ! Unit area vector (from c1 to c2)
+    real(p2),                       intent(in) :: xc1, yc1, zc1     ! Left cell centroid
+    real(p2),                       intent(in) :: xc2, yc2, zc2     ! Right cell centroid
+    type(derivative_data_type_df5), dimension(5),     INTENT(OUT):: visc_flux
+    
+    
+    ! local vars
+    type(derivative_data_type_df5), dimension(3,3)    :: face_gradq, gradQ, tau
+    type(derivative_data_type_df5), dimension(3)      :: face_gradT, ds, dsds2, delU, q_face
+    ! face_gradT = [dTdx dTdy dTdz]
+    type(derivative_data_type_df5)                    :: mu_face, heat_conductivity
+    type(derivative_data_type_df5), dimension(5)      :: u1, u2
+    type(derivative_data_type_df5)                    :: theta_1, theta_2, theta_3
+
+    integer                     :: i, iu
+    
+    real(p2), dimension(3) :: grad_uL, grad_vL, grad_wL, grad_TL, grad_pL
+    real(p2), dimension(3) :: grad_uR, grad_vR, grad_wR, grad_TR, grad_pR
+
+    ! Calculate the face gradients
+    ds = (/xc2-xc1, yc2-yc1, zc2-zc1/) ! vector pointing from center of cell 1 to cell 2
+    dsds2 = ds/(ds(1)**2 + ds(2)**2 + ds(3)**2) ! ds/ds^2
+
+    grad_pL = gradq1(:,1)
+    grad_uL = gradq1(:,2)
+    grad_vL = gradq1(:,3)
+    grad_wL = gradq1(:,4)
+    grad_TL = gradq1(:,5)
+
+    grad_pR = gradq2(:,1)
+    grad_uR = gradq2(:,2)
+    grad_vR = gradq2(:,3)
+    grad_wR = gradq2(:,4)
+    grad_TR = gradq2(:,5)
+    
+    do iu = 1,3
+        ! delU = delU_bar + [dU - dot(delU_bar,ds)]*ds/ds^2
+        ! delU_bar is the arithmetic mean of the left and right gradients.  In order to prevent checkerboarding on certain 
+        ! grids the gradient along the vector ds is replaced with a central difference.
+        delU = half * (gradq1(:,iu+1) + gradq2(:,iu+1))
+        face_gradq(iu,:) = delU + ((q2(iu+1) - q1(iu+1)) - ddt_dot_product(delU,ds,3) ) * dsds2
+    end do
+    
+    
+    delU = half * (gradq1(:,5) + gradq2(:,5))
+    face_gradT(:) = delU + ((q2(5) - q1(5)) - ddt_dot_product(delU,ds,3) ) * dsds2
+    mu_face = half * (mu1 + mu2) ! mu = M_inf*mu_ND/Re_inf
+    tau = compute_tau_ddt(face_gradq,mu_face)
+    heat_conductivity = mu_face/((gamma - one) * Pr)
+    q_face = half * (q1(2:4) + q2(2:4)) ! three face velocities
+
+    theta_1 = -(q_face(1)*tau(1,1) + q_face(2)*tau(2,1) + q_face(3)*tau(3,1)) + heat_conductivity * face_gradT(1)
+    theta_2 = -(q_face(1)*tau(1,2) + q_face(2)*tau(2,2) + q_face(3)*tau(3,2)) + heat_conductivity * face_gradT(2)
+    theta_3 = -(q_face(1)*tau(1,3) + q_face(2)*tau(2,3) + q_face(3)*tau(3,3)) + heat_conductivity * face_gradT(3)
+
+
+    visc_flux(1) = zero
+    visc_flux(2) = -(n12(1)*tau(1,1) + n12(2)*tau(1,2) + n12(3)*tau(1,3))
+    visc_flux(3) = -(n12(1)*tau(2,1) + n12(2)*tau(2,2) + n12(3)*tau(2,3))
+    visc_flux(4) = -(n12(1)*tau(3,1) + n12(2)*tau(3,2) + n12(3)*tau(3,3))
+    visc_flux(5) = n12(1)*theta_1  + n12(2)*theta_2  + n12(3)*theta_3
+
+    
+end subroutine viscous_flux_primitive
+
+
+function compute_tau_ddt(gradU_face,mu_face) ! lol this is wrong...
+  use module_common_data, only : p2, third, two
+  use module_ccfv_data_grid, only : ncells
+  use derivative_data_df5
+
+  implicit none
+  type(derivative_data_type_df5), dimension(3,3), intent(in) :: gradU_face
+  type(derivative_data_type_df5), intent(in)                 :: mu_face
+  type(derivative_data_type_df5), dimension(3,3) :: compute_tau_ddt
+  
+  integer :: i
+  type(derivative_data_type_df5) :: divergence
+
+  
+  
+  divergence = gradU_face(1,1) + gradU_face(2,2) + gradU_face(3,3)
+  compute_tau_ddt(1,1) = two*mu_face*(gradU_face(1,1) - third * (divergence)) ! Tau_xx
+  compute_tau_ddt(2,2) = two*mu_face*(gradU_face(2,2) - third * (divergence)) ! Tau_yy
+  compute_tau_ddt(3,3) = two*mu_face*(gradU_face(3,3) - third * (divergence)) ! Tau_zz
+  compute_tau_ddt(1,2) = mu_face * (gradU_face(2,1) + gradU_face(1,2))           ! Tau_xy = mu(du/dy + dv/dx)
+  compute_tau_ddt(2,1) = compute_tau_ddt(1,2)
+  compute_tau_ddt(1,3) = mu_face * (gradU_face(3,1) + gradU_face(1,3))           ! Tau_xz = mu(du/dz + dw/dx)
+  compute_tau_ddt(3,1) = compute_tau_ddt(1,3)
+  compute_tau_ddt(2,3) = mu_face * (gradU_face(3,2) + gradU_face(2,3))           ! Tau_xy = mu(du/dy + dv/dx)
+  compute_tau_ddt(3,2) = compute_tau_ddt(2,3)
+  
+end Function compute_tau_ddt
+
+
  end module flux_functions_ddt

@@ -15,10 +15,11 @@ contains
         use module_ccfv_data_soln  , only : res, u, gradw, wsn, gradT, mu, w, gamma, u2w, Temp, uR2, gradq, q, u2q, q2u
         use module_input_parameter , only : Pr, Freestream_Temp, visc_flux_method ! Prandtl number
         use module_flux            , only : interface_flux, compute_viscosity, compute_tau, viscous_flux, viscous_bflux, &
-                                            viscous_alpha
+                                            viscous_alpha, viscous_flux_primitive
         use module_bc_states       , only : get_right_state, get_viscous_right_state
         use module_ccfv_gradient   , only : compute_gradient, compute_temperature_gradient
-        use module_input_parameter , only : accuracy_order, use_limiter, navier_stokes, low_mach_correction
+        use module_input_parameter , only : accuracy_order, use_limiter, navier_stokes, low_mach_correction, min_ref_vel, &
+                                            eps_weiss_smith, pressure_dif_ws
         use module_ccfv_limiter    , only : compute_limiter, phi
         use module_gewp            , only : gewp_solve
 
@@ -55,7 +56,8 @@ contains
         real(p2), dimension(3,3)    :: del, del_inv
         integer                     :: bn1, bn2
 
-        real(p2) :: epsilon = 1e-05_p2
+        real(p2) :: dp
+        ! real(p2) :: epsilon = 1e-05_p2
         real(p2) :: local_vel
 
         ! Debug
@@ -89,42 +91,27 @@ contains
         
         if (low_mach_correction) then
             do i = 1,ncells
-                absU = sqrt(q(2,i)**2 + q(3,i)**2 + q(4,i)**2)
-                a = q(5,i)
-                if (absU < epsilon * a) then
-                    uR2(i) = (epsilon * a) ** 2
-                elseif (absU < a) then
-                    uR2(i) = absU ** 2
-                else
-                    uR2(i) = a**2
-                end if
+                uR2(i) = min(q(5,i),max(sqrt(q(2,i)**2 + q(3,i)**2 + q(4,i)**2), eps_weiss_smith*q(5,i),min_ref_vel))**2
+                ! uR2(i) = min(q(5,i),max(sqrt(q(2,i)**2 + q(3,i)**2 + q(4,i)**2),min_ref_vel))**2
             end do
-
-            if (navier_stokes) then
-                ! loop the faces.  I'm sure this can be done more efficiently but right now im just working on getting it working...
-                do i = 1,nfaces
-                    c1 = face(1,i)
-                    c2 = face(2,i)
-                    ejk = (/ cell(c2)%xc - cell(c1)%xc, cell(c2)%yc - cell(c1)%yc, cell(c2)%zc - cell(c1)%zc /)
-                    mag_ejk = sqrt(ejk(1)**2 + ejk(2)**2 + ejk(3)**2)
-                
-                    if ( sqrt(uR2(c1)) < (mu(c1)/(w(1,c1)*mag_ejk)) ) then
-                        uR2(c1) = (mu(c2)/(w(1,c2)*mag_ejk)) ** 2
-                    end if
-                    if ( sqrt(uR2(c2)) < (mu(c2)/(w(1,c2)*mag_ejk)) ) then
-                        uR2(c2) = (mu(c2)/(w(1,c2)*mag_ejk)) ** 2
-                    end if
-                end do
-            end if                
+            do i = 1,nfaces
+                c1 = face(1,i)
+                c2 = face(2,i)
+                if (navier_stokes) then
+                    !stuff
+                end if
+                dp = abs(q(1,c2) - q(1,c1))
+                uR2(c1) = min(q(5,c1),max(sqrt(uR2(c1)), pressure_dif_ws*sqrt(dp*q(5,c1)/(gamma*q(1,c1))) ))**2
+                uR2(c2) = min(q(5,c2),max(sqrt(uR2(c2)), pressure_dif_ws*sqrt(dp*q(5,c2)/(gamma*q(1,c2))) ))**2
+            end do
         end if
 
         if (accuracy_order == 2 .or. navier_stokes) call compute_gradient
         if (navier_stokes) then
-            call compute_temperature_gradient
+            if (.not. low_mach_correction) call compute_temperature_gradient
             call compute_viscosity
         end if
-        ! Temp_local = temp
-        !local_gradw = gradw
+
         if (use_limiter)  call compute_limiter
         !--------------------------------------------------------------------------------
         !--------------------------------------------------------------------------------
@@ -217,11 +204,19 @@ contains
             magds = sqrt(ds(1)**2 + ds(2)**2 + ds(3)**2)
             ds = ds/magds
             if (visc_flux_method == 'corrected') then ! Corrected gradient
-                call viscous_flux(w(:,c1),w(:,c2), gradw1,gradw2, Temp(c1),Temp(c2), gradT(:,c1),gradT(:,c2), mu(c1),mu(c2), &
-                                                    unit_face_normal, & !<- unit face normal
+                if (low_mach_correction) then
+                    call viscous_flux_primitive(q1,q2,gradq1,gradq2,mu(c1),mu(c2), &
+                                                     unit_face_normal, & !<- unit face normal
                                 cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
                                 cell(c2)%xc, cell(c2)%yc, cell(c2)%zc, & !<- Right cell centroid
                                                             visc_flux  )
+                else
+                    call viscous_flux(w(:,c1),w(:,c2), gradw1,gradw2, Temp(c1),Temp(c2), gradT(:,c1),gradT(:,c2), mu(c1),mu(c2), &
+                                                         unit_face_normal, & !<- unit face normal
+                                    cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
+                                    cell(c2)%xc, cell(c2)%yc, cell(c2)%zc, & !<- Right cell centroid
+                                                                visc_flux  )
+                end if
             else if (visc_flux_method == 'alpha') then
                 call viscous_alpha(u1,u2,gradw1,gradw2,unit_face_normal,ds,magds,visc_flux)
             else
@@ -234,7 +229,11 @@ contains
             res(:,c2) = res(:,c2) - visc_flux * face_nrml_mag(i)
             
             ! Add to the spectral radius of the cell (CFD Principles and Applications Eq. 6.21)
-            rho_face = half * (u(1,c1) + u(1,c2))
+            if (low_mach_correction) then
+                rho_face = half*gamma*((q1(1)/q1(5)) + (q2(1)/q2(5)))
+            else
+                rho_face = half * (u1(1) + u2(1))
+            end if
             wsn(c1) = wsn(c1) + (four/(cell(c1)%vol**2)) * max(four/(three*rho_face),gamma/rho_face) / (magds**0) & 
                         * two * (mu(c1)/Pr) * face_nrml_mag(i)
             wsn(c2) = wsn(c2) + (four/(cell(c2)%vol**2)) * max(four/(three*rho_face),gamma/rho_face) / (magds**0) & 
@@ -257,10 +256,8 @@ contains
                 end if
 
                 c1 = bound(ib)%bcell(j)
-                
-                
+                                
                 unit_face_normal = bound(ib)%bface_nrml(:,j)
-
                 
                 gradw2 = zero ! won't matter since boundary cell center will be at face center
 
@@ -272,7 +269,7 @@ contains
                                          u1, unit_face_normal, bc_type(ib), ub)
                     gradq1 = gradq(1:3,1:5,c1)
                     qb = u2q(ub)
-                    uR2b = min(qb(5) , max(qb(2)**2 + qb(3)**2 + qb(4)**2, epsilon*qb(5) ))
+                    uR2b = min(qb(5) , max(sqrt(qb(2)**2 + qb(3)**2 + qb(4)**2), eps_weiss_smith*qb(5),min_ref_vel ))**2
                     call interface_flux(          q1,      qb, & !<- Left/right states
                                           gradq1,      gradw2, & !<- Left/right gradients
                                              unit_face_normal, & !<- unit face normal
@@ -284,7 +281,7 @@ contains
                                             bface_centroid(2), &
                                             bface_centroid(3), & !<- boundary ghost cell "center"
                                             phi1,        phi2, & !<- Limiter functions
-                                         num_flux, wave_speed, & !<- Output)
+                                         num_flux, wave_speed  , & !<- Output)
                                      uR2L=uR2(c1), uR2R=uR2b) !<- scaling factor (optional)
                 else
                     u1 = u(1:5,c1)
@@ -330,25 +327,36 @@ contains
                     mag_ejk = sqrt( ejk(1)**2 + ejk(2)**2 + ejk(3)**2 )
                     ejk = ejk/mag_ejk
                     cg_center = bface_centroid + d_Cb ! ghost cell center
-                    
-                    
-                    call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
-                                                 u1,gradw1,unit_face_normal,bc_type(ib),ub,gradwb)
-
+                    if (low_mach_correction) then
+                        call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
+                                                     u1,gradq1,unit_face_normal,bc_type(ib),ub,gradqb)
+                        qb = u2q(ub)
+                    else
+                        call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
+                                                     u1,gradw1,unit_face_normal,bc_type(ib),ub,gradwb)
+                    end if
                     if (visc_flux_method == 'alpha') then
                         call viscous_alpha(u1,ub,gradw1,gradwb,bound(ib)%bface_nrml(:,j),ejk,mag_ejk,visc_flux)
                     elseif (visc_flux_method == 'corrected') then
-                        w1 = w(:,c1)
-                        wb = u2w(ub)
-                        Tb = gamma*wb(5)/wb(1)
-                        a2 = gamma*half*(wb(5))/wb(1)
-                        grad_Tb = ( gamma*gradwb(:,5) - a2*gradwb(:,1)) /wb(1)
+                        if (low_mach_correction) then
+                            call viscous_flux_primitive(q1,qb,gradq1,gradqb,mu(c1),mu(c1), &
+                                                                         unit_face_normal, & !<- unit face normal
+                                                  cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
+                                                 cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
+                                                                                visc_flux  )
+                        else
+                            w1 = w(:,c1)
+                            wb = u2w(ub)
+                            Tb = gamma*wb(5)/wb(1)
+                            a2 = gamma*half*(wb(5))/wb(1)
+                            grad_Tb = ( gamma*gradwb(:,5) - a2*gradwb(:,1)) /wb(1)
 
-                        call viscous_flux(w1,wb, gradw1,gradwb, Temp(c1),Tb, gradT(:,c1),grad_Tb, mu(c1),mu(c1), &
-                                                    unit_face_normal, & !<- unit face normal
-                            cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
-                            cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
-                                                            visc_flux  )
+                            call viscous_flux(w1,wb, gradw1,gradwb, Temp(c1),Tb, gradT(:,c1),grad_Tb, mu(c1),mu(c1), &
+                                                        unit_face_normal, & !<- unit face normal
+                                cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
+                                cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
+                                                                visc_flux  )
+                        end if
                     else
                         write(*,*) 'Unsupported viscous flux method. Stop!'
                         stop
@@ -359,7 +367,13 @@ contains
                         write (*,*) "nan value present - press [Enter] to continue"
                         read(unit=*,fmt=*)
                     end if
-                    wsn(c1) = wsn(c1) + (four/(cell(c1)%vol**2)) * max(four/(three*u(1,c1)),gamma/u(1,c1))/(mag_ejk**0) &
+                    if (low_mach_correction) then
+                        rho_face = gamma*(q1(1)/q1(5)) ! not actually the face, just reusing variables...
+                    else
+                        rho_face = (u1(1) + u2(1))
+                    end if
+
+                    wsn(c1) = wsn(c1) + (four/(cell(c1)%vol**2)) * max(four/(three*rho_face),gamma/rho_face)/(mag_ejk**0) &
                                 * two * (mu(c1)/Pr) * bound(ib)%bface_nrml_mag(j)
                 end if
 

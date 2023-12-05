@@ -1406,23 +1406,25 @@ contains
         real(p2), dimension(3), intent(out) ::  normal          ! unit normal vecotr
         real(p2),               intent(out) ::  area      ! magnitude of normal vector (face area)
         ! Local Vars
-        ! real(p2), dimension(3)              :: a, b 
-        ! real(p2)                            :: mag
-        ! real(p2) :: nx,ny,nz
+        real(p2), dimension(3)              :: a, b 
+        real(p2)                            :: mag
+        real(p2) :: nx,ny,nz
         ! This should be cleaned up at some point, perhaps when I get to the chapter in my book on libraries...
-        ! a(1) = x2-x1
-        ! a(2) = y2-y1  
-        ! a(3) = z2-z1
-        ! b(1) = x3-x1
-        ! b(2) = y3-y1  
-        ! b(3) = z3-z1          
+        a(1) = x2-x1
+        a(2) = y2-y1  
+        a(3) = z2-z1
+        b(1) = x3-x1
+        b(2) = y3-y1  
+        b(3) = z3-z1          
         ! ! Cross Product
-        ! normal(1) = half*(a(2)*b(3) - a(3)*b(2))
-        ! normal(2) = half*(a(3)*b(1) - a(1)*b(3))
-        ! normal(3) = half*(a(1)*b(2) - a(2)*b(1))
-        normal(1) = half*(y1*(z2-z3)+y2*(z3-z1)+y3*(z1-z2))
-        normal(2) = half*(z1*(x2-x3)+z2*(x3-x1)+z3*(x1-x2))
-        normal(3) = half*(x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2))
+        normal(1) = half*(a(2)*b(3) - a(3)*b(2))
+        normal(2) = half*(a(3)*b(1) - a(1)*b(3))
+        normal(3) = half*(a(1)*b(2) - a(2)*b(1))
+        ! I guess Were using the above, it seems to have slightly better finite precision... :)
+
+        ! normal(1) = half*(y1*(z2-z3)+y2*(z3-z1)+y3*(z1-z2))
+        ! normal(2) = half*(z1*(x2-x3)+z2*(x3-x1)+z3*(x1-x2))
+        ! normal(3) = half*(x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2))
         ! write(*,*) normal(1) - nx
         ! write(*,*) normal(2) - ny
         ! write(*,*) normal(3) - nz

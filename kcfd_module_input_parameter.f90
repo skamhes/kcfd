@@ -38,7 +38,7 @@ module module_input_parameter
     character(80)          :: inviscid_jac           = "roe"
     character(80)          :: solver_type            = "rk"
     character(80)          :: jacobian_method        = "analytical"
-    real(p2), dimension(5) :: eig_limiting_factor    = (/ 0.1, 0.1, 0.1, 0.1, 0.1 /)  !eigenvalue limiting factor
+    real(p2), dimension(5) :: eig_limiting_factor    = (/ 0.1_p2, 0.1_p2, 0.1_p2, 0.1_p2, 0.1_p2 /)  !eigenvalue limiting factor
     real(p2), dimension(5) :: variable_ur            = (/ 1, 1, 1, 1, 1 /)  ! Variable under relaxation factors (only used in 
     ! implicit) computations
   
@@ -58,13 +58,19 @@ module module_input_parameter
     ! Navier-Stokes Info
     logical :: navier_stokes = .false.
     character(80) :: visc_flux_method = 'alpha'
-    real(p2) :: R = 287.058 ! ideal gas constant for air
-    real(p2) :: Freestream_Temp = 293.15 ! degK Sea level room temp
-    real(p2) :: Pr = 0.72 ! Prandtl number for sea-level air
-    real(p2) :: Reynolds = 1.6e6 ! Freestream Reynolds number
-    real(p2) :: C_0 = 110.5 ! degK Sutherland's constant (or something like that...) for air
+    real(p2) :: R = 287.058_p2 ! ideal gas constant for air
+    real(p2) :: Freestream_Temp = 293.15_p2 ! degK Sea level room temp
+    real(p2) :: Pr = 0.72_p2 ! Prandtl number for sea-level air
+    real(p2) :: Reynolds = 1.6e6_p2 ! Freestream Reynolds number
+    real(p2) :: C_0 = 110.5_p2 ! degK Sutherland's constant (or something like that...) for air
+    
+    ! Low Mach correction
     logical  :: low_mach_correction = .false. ! use preconditioning for flows with a low mach number
-  
+    real(p2) :: min_ref_vel = 1.0e-08_p2 ! minimum reference value for epsilon
+    real(p2) :: eps_weiss_smith = 1.0e-03_p2 !epsilon for reference velocity used with low mach preconditioning.
+    real(p2) :: pressure_dif_ws = 5.0_p2
+    character(80) :: entropy_fix = "harten"
+
   ! End of Default input values
   !-------------------------------------------------------------------------
   
@@ -110,13 +116,26 @@ module module_input_parameter
     grid_type            , &
     visc_flux_method     , &
     low_mach_correction  , &
-    gauge_pressure
+    gauge_pressure       , &
+    min_ref_vel          , &
+    eps_weiss_smith      , &
+    pressure_dif_ws      , &
+    entropy_fix
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)
           implicit none
           character(len=*), intent(in) :: namelist_file
           integer :: os
+
+          ! this seems to be better for the weiss-smith low mach preconditioning
+          if (low_mach_correction) then
+            if (entropy_fix == 'harten') then
+              eig_limiting_factor = (/ 0.001_p2, 0.001_p2, 0.001_p2, 0.1_p2, 0.1_p2 /)
+            elseif (entropy_fix == 'mavriplis') then
+              eig_limiting_factor = (/ 0.1_p2, 0.1_p2, 0.1_p2, 0.1_p2, 0.1_p2 /)
+            end if
+          end if
 
           write(*,*)
           write(*,*) "-------------------------------------------------------"

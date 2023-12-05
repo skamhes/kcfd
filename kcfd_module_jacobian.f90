@@ -8,13 +8,14 @@ contains
     subroutine compute_jacobian
         
         use module_common_data          , only : p2, zero, nb, bc_type, half, one, two
-        use module_flux_jac_interface   , only : interface_jac, interface_jac_visc, interface_viscous_alpha_jacobian
+        use module_flux_jac_interface   , only : interface_jac, interface_viscous_alpha_jacobian, & 
+                                                 interface_flux_viscous_prim
         use module_ccfv_data_grid       , only : nfaces, face, ncells, cell, face_nrml, face_nrml_mag, jac, &
                                                  kth_nghbr_of_1, kth_nghbr_of_2, bound
-        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw, uR2, gamma, wsn, q, u2q, res, q2u
+        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw, uR2, gamma, wsn, q, u2q, res, q2u, mu, gradq
         use module_bc_states            , only : get_right_state, get_viscous_right_state
         use module_gewp                 , only : gewp_solve
-        use module_input_parameter      , only : navier_stokes, low_mach_correction
+        use module_input_parameter      , only : navier_stokes, low_mach_correction, visc_flux_method
         
         implicit none
         ! Local Vars
@@ -48,41 +49,8 @@ contains
 
             ! Compute the flux Jacobian for given w1 and w2
             if (low_mach_correction) then
-
                 ! in this case dFndu_ is actually dFndq_.  I'm developing a rather long list of things that need to be fixed...
                 call interface_jac( q(:,c1), q(:,c2), unit_face_nrml, dFnduL, dFnduR, uR2L = uR2(c1), uR2R = uR2(c2))
-
-                ! ! Define some quantities for the left side
-                ! H = ((gamma*w(5,c1)/w(1,c1))**2)/(gamma-one) + half * ( w(2,c1)**2 + w(3,c1)**2 + w(4,c1)**2 )
-                ! rho_p = w(1,c1)/w(5,c1)
-                ! rho_T = - (w(1,c1)**2)/(w(5,c1)*gamma)
-                ! theta = (one/uR2(c1)) - rho_T*(gamma - one)/(w(1,c1))
-
-                ! ! Switch into derivatives w.r.t. Q
-                ! duLdqL(1,:) = (/ rho_p,         zero,            zero,            zero,            rho_T                        /)
-                ! duLdqL(2,:) = (/ rho_p*w(2,c1), w(1,c1),         zero,            zero,            rho_T*w(2,c1)                /)
-                ! duLdqL(3,:) = (/ rho_p*w(3,c1), zero,            w(1,c1),         zero,            rho_T*w(3,c1)                /)
-                ! duLdqL(4,:) = (/ rho_p*w(4,c1), zero,            zero,            w(1,c1),         rho_T*w(4,c1)                /)
-                ! duLdqL(5,:) = (/ rho_p*H - one, w(1,c1)*w(2,c1), w(1,c1)*w(3,c1), w(1,c1)*w(4,c1), rho_T*H + w(1,c1)/(gamma-one)/)
-
-                ! ! Now do the same for the right
-
-                ! H = ((gamma*w(5,c2)/w(1,c2))**2)/(gamma-one) + half * ( w(2,c2)**2 + w(3,c2)**2 + w(4,c2)**2 )
-                ! rho_p = w(1,c2)/w(5,c2)
-                ! rho_T = - (w(1,c2)**2)/(w(5,c2)*gamma)
-                ! theta = (one/uR2(c2)) - rho_T*(gamma - one)/(w(1,c2))
-
-                ! ! Switch into derivatives w.r.t. Q
-                ! duRdqR(1,:) = (/ rho_p,         zero,            zero,            zero,            rho_T                        /)
-                ! duRdqR(2,:) = (/ rho_p*w(2,c2), w(1,c2),         zero,            zero,            rho_T*w(2,c2)                /)
-                ! duRdqR(3,:) = (/ rho_p*w(3,c2), zero,            w(1,c2),         zero,            rho_T*w(3,c2)                /)
-                ! duRdqR(4,:) = (/ rho_p*w(4,c2), zero,            zero,            w(1,c2),         rho_T*w(4,c2)                /)
-                ! duRdqR(5,:) = (/ rho_p*H - one, w(1,c2)*w(2,c2), w(1,c2)*w(3,c2), w(1,c2)*w(4,c2), rho_T*H + w(1,c2)/(gamma-one)/)
-
-                ! ! Now we want dF/dQ = (dF/dU)(dU/dQ).  For simplicity we will still be calling it dFdU
-                ! dFnduL = matmul(dFnduL,duLdqL)
-                ! dFnduR = matmul(dFnduR,duRdqR)
-
             else
                 call interface_jac( w(:,c1), w(:,c2), unit_face_nrml, dFnduL, dFnduR)
             end if
@@ -102,49 +70,25 @@ contains
             if (.not. navier_stokes) then
                 cycle
             else
-                ! ! Calculate the face gradients
-                ! xc1 = cell(c1)%xc
-                ! yc1 = cell(c1)%yc
-                ! zc1 = cell(c1)%zc
-                ! xc2 = cell(c2)%xc
-                ! yc2 = cell(c2)%yc
-                ! zc2 = cell(c2)%zc
-                ! delta_s = (/xc2-xc1, yc2-yc1, zc2-zc1/) ! vector pointing from center of cell 1 to cell 2
+                if (visc_flux_method == 'alpha') then
+                    u1      = u(:,c1)
+                    u2      = u(:,c2)
 
-                ! call interface_jac_visc(w(:,c1),w(:,c2),Temp(c1),Temp(c2),mu(c1),mu(c2),gradw(:,2:4,c1),gradw(:,2:4,c2), &
-                !                         unit_face_nrml,delta_s,dFnduL,dFnduR)
+                    gradw1  = gradw(:,:,c1)
+                    gradw2  = gradw(:,:,c2)
 
-                ! ! Add to diagonal term of C1
-                ! jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
-                ! ! get neighbor index k for cell c1
-                ! k = kth_nghbr_of_1(i)
-                ! ! add to off diagonal neighbor k for cell c1
-                ! jac(c1)%off_diag(:,:,k) = jac(c1)%off_diag(:,:,k) + dFnduR * face_mag
+                    ds      = (/cell(c2)%xc - cell(c1)%xc,cell(c2)%yc-cell(c1)%yc,cell(c2)%zc-cell(c1)%zc/)
+                    mag_ds   = sqrt(ds(1)**2 + ds(2)**2 + ds(3)**2)
+                    ds      = ds/mag_ds
 
-                ! ! Subtract terms from c2
-                ! jac(c2)%diag            = jac(c2)%diag            - dFnduR * face_mag
-                ! k = kth_nghbr_of_2(i)
-                ! jac(c2)%off_diag(:,:,k) = jac(c2)%off_diag(:,:,k) - dFnduL * face_mag
-                u1      = u(:,c1)
-                u2      = u(:,c2)
-
-                gradw1  = gradw(:,:,c1)
-                gradw2  = gradw(:,:,c2)
-
-                ds      = (/cell(c2)%xc - cell(c1)%xc,cell(c2)%yc-cell(c1)%yc,cell(c2)%zc-cell(c1)%zc/)
-                mag_ds   = sqrt(ds(1)**2 + ds(2)**2 + ds(3)**2)
-                ds      = ds/mag_ds
-
-                call interface_viscous_alpha_jacobian(u1,u2,gradw1,gradw2,unit_face_nrml,ds,mag_ds,dFnduL,dFnduR)
-
-                ! if (low_mach_correction) then
-    
-                !     ! We want dF/dQ = (dF/dU)(dU/dQ).  We don't need to redifine the left and right states.
-                !     dFnduL = matmul(dFnduL,duLdqL)
-                !     dFnduR = matmul(dFnduR,duRdqR)
-    
-                ! end if
-
+                    call interface_viscous_alpha_jacobian(u1,u2,gradw1,gradw2,unit_face_nrml,ds,mag_ds,dFnduL,dFnduR)
+                elseif (visc_flux_method == 'corrected') then
+                    call interface_flux_viscous_prim(q(:,c1),q(:,c2),mu(c1),mu(c2),gradq(:,:,c1),gradq(:,:,c2),unit_face_nrml, &
+                                                                                          cell(c1)%xc,cell(c1)%yc,cell(c1)%zc, & 
+                                                                                          cell(c2)%xc,cell(c2)%yc,cell(c2)%zc, &
+                                                                                          dFnduL,dFnduR)
+                endif
+                
                 ! Add to diagonal term of C1
                 jac(c1)%diag            = jac(c1)%diag            + dFnduL * face_mag
                 ! get neighbor index k for cell c1
@@ -180,22 +124,7 @@ contains
                                      u1, unit_face_nrml, bc_type(ib), ub)
                     qb = u2q(ub)
                     call interface_jac( q1, qb, unit_face_nrml, dFnduL, dFnduR, uR2L = uR2(c1), uR2R = uR2(c1))
-                    ! Define some quantities for the left side
-                    ! H = ((gamma*w(5,c1)/w(1,c1))**2)/(gamma-one) + half * ( w(2,c1)**2 + w(3,c1)**2 + w(4,c1)**2 )
-                    ! rho_p = w(1,c1)/w(5,c1)
-                    ! rho_T = - (w(1,c1)**2)/(w(5,c1)*gamma)
-                    ! theta = (one/uR2(c1)) - rho_T*(gamma - one)/(w(1,c1))
 
-                    ! ! Switch into derivatives w.r.t. Q
-                    ! duLdqL(1,:)=(/rho_p,         zero,            zero,            zero,            rho_T                        /)
-                    ! duLdqL(2,:)=(/rho_p*w(2,c1), w(1,c1),         zero,            zero,            rho_T*w(2,c1)                /)
-                    ! duLdqL(3,:)=(/rho_p*w(3,c1), zero,            w(1,c1),         zero,            rho_T*w(3,c1)                /)
-                    ! duLdqL(4,:)=(/rho_p*w(4,c1), zero,            zero,            w(1,c1),         rho_T*w(4,c1)                /)
-                    ! duLdqL(5,:)=(/rho_p*H - one, w(1,c1)*w(2,c1), w(1,c1)*w(3,c1), w(1,c1)*w(4,c1), rho_T*H + w(1,c1)/(gamma-one)/)
-
-                    ! ! Now we want dF/dQ = (dF/dU)(dU/dQ).  For simplicity we will still be calling it dFdU
-                    ! dFnduL = matmul(dFnduL,duLdqL)
-                
                 else
                     u1 = u(1:5,c1)
                     call get_right_state(bface_centroid(1), bface_centroid(2), bface_centroid(3), &
@@ -210,17 +139,25 @@ contains
                 if (.not. navier_stokes) then
                     cycle
                 else
-
-                    d_Cb = (/bface_centroid(1) - cell(c1)%xc,bface_centroid(2) - cell(c1)%yc,bface_centroid(3) - cell(c1)%zc/)
-                    ejk = 2*d_Cb
-                    mag_ejk = sqrt( ejk(1)**2 + ejk(2)**2 + ejk(3)**2 )
-                    ejk = ejk/mag_ejk
-
                     call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
-                                                 u1,gradw1,unit_face_nrml,bc_type(ib),ub,gradwb)
+                    u1,gradw1,unit_face_nrml,bc_type(ib),ub,gradwb)
 
-                    call interface_viscous_alpha_jacobian(u1,ub,gradw1,gradwb,unit_face_nrml,ejk,mag_ejk,dFnduL,dFnduR)
+                    if (visc_flux_method == 'alpha') then
+                        d_Cb = (/bface_centroid(1) - cell(c1)%xc,bface_centroid(2) - cell(c1)%yc,bface_centroid(3) - cell(c1)%zc/)
+                        ejk = 2*d_Cb
+                        mag_ejk = sqrt( ejk(1)**2 + ejk(2)**2 + ejk(3)**2 )
+                        ejk = ejk/mag_ejk
 
+    
+                        call interface_viscous_alpha_jacobian(u1,ub,gradw1,gradwb,unit_face_nrml,ejk,mag_ejk,dFnduL,dFnduR)
+                    elseif(visc_flux_method == 'corrected') then
+                        call interface_flux_viscous_prim(q1,qb,mu(c1),mu(c1),gradq(:,:,c1),gradwb,unit_face_nrml, &
+                        cell(c1)%xc,cell(c1)%yc,cell(c1)%zc, &
+                        bface_centroid(1) - cell(c1)%xc, &
+                        bface_centroid(2) - cell(c1)%yc, & 
+                        bface_centroid(3) - cell(c1)%zc, &
+                        dFnduL, dFnduR)
+                    endif
                     ! if (low_mach_correction) then
     
                     !     ! We want dF/dQ = (dF/dU)(dU/dQ).  We don't need to redifine the left and right states.
@@ -260,30 +197,6 @@ contains
                 absu = sqrt(q(2,i)**2 + q(3,i)**2 + q(4,i)**2 )
                 lambda = absu*(one-alpha) + sqrt((alpha**2) * (absu**2) + uR2(i))
                 dtau(i) = dtau(i) * two * wsn(i) / lambda
-
-                ! jac(i)%diag(:,:) = jac(i)%diag(:,:) + preconditioner * cell(i)%vol/dtau(i)
-
-                ! !         Old stuff
-                !         call gewp_solve(preconditioner, 5, pre_inv, os)
-                !         if (os .ne. 0) then
-                !             write(*,*) 'Error inverting precondition matrix at cell: ', i,' Stop!'
-                !             stop
-                !         end if
-
-                !         jac(i)%diag = matmul(pre_inv,jac(i)%diag)
-
-                !         do k = 1,cell(i)%nnghbrs
-                !             jac(i)%off_diag(:,:,k) = matmul(pre_inv,jac(i)%off_diag(:,:,k))
-                !         end do
-                        
-                !         res(:,i) = matmul(pre_inv,res(:,i))
-
-                !     end if
-
-                !     do k = 1,5
-                !         jac(i)%diag(k,k) = jac(i)%diag(k,k) + cell(i)%vol/dtau(i)
-                !     end do
-                
 
             else
                 do k = 1,5

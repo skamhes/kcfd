@@ -89,18 +89,19 @@ contains
 
         ! Allocate solution arrays
 
-        allocate( u(nq,ncells) )
+        if (.not.low_mach_correction) allocate( u(nq,ncells) )
         allocate( w(nq,ncells) )
         if (low_mach_correction) allocate( q(nq,ncells) )
 
-        if (navier_stokes) allocate(    Temp(ncells) )
+        if (navier_stokes .and. .not.low_mach_correction) allocate(    Temp(ncells) )
         if (navier_stokes) allocate(      mu(ncells) )
         ! if (navier_stokes) allocate( tau(3,3,ncells) )
         ! tau = zero ! Initial shear will be zero
         
         ! Initialization
-        u = zero
+        if (.not. low_mach_correction) u = zero
         w = zero
+        if (low_mach_correction) q = zero
 
         !------------------------------------------------------
         ! Allocate low mach correction array (if used)
@@ -127,12 +128,19 @@ contains
         ! Allocate gradient array
 
         ! Initialize gradient arrays (just zero here).
-        if (low_mach_correction) allocate(gradq(3,nq,ncells))
-        allocate( gradw(3,nq,ncells) )
-        if (navier_stokes) allocate( gradT(3,ncells) )
-        ! Initialization
+        if (low_mach_correction) then
+            allocate(gradq(3,nq,ncells))
+            gradq = zero
+            allocate( gradw(3,nq,ncells) )
+        else
+            allocate( gradw(3,nq,ncells) )
             gradw = zero
-            if (navier_stokes) gradT = zero
+            if (navier_stokes) then
+                allocate( gradT(3,ncells) )
+                ! Initialization
+                gradT = zero
+            end if
+        end if
 
         !------------------------------------------------------
         ! Allocate residual array
@@ -192,7 +200,7 @@ contains
                 !Compute and store conservative variables.
                 q(:,i) = w2q( w_initial )
                 if (navier_stokes) then 
-                    Temp(i) =  T_initial
+                    ! Temp(i) =  T_initial
                     mu(i)   = mu_initial
                 end if
             end do cell_loop_prim
@@ -216,12 +224,12 @@ contains
     subroutine load_data_file
         use module_ccfv_data_grid , only : ncells
         use module_common_data, only : filename_data, p2, one, pi
-        use module_input_parameter, only : M_inf, aoa, sideslip, Reynolds, C_0, Freestream_Temp
+        use module_input_parameter, only : M_inf, aoa, sideslip, Reynolds, C_0, Freestream_Temp, low_mach_correction
         
         implicit none
 
         integer :: i, os
-        real(p2), dimension(5) :: wi
+        real(p2), dimension(5) :: ui
 
         rho_inf = one
         u_inf = M_inf*cos(aoa*pi/180_p2)*cos(sideslip*pi/180_p2)
@@ -246,10 +254,16 @@ contains
         
         
         do i = 1,ncells
-            read(1,*) u(1,i),u(2,i),u(3,i),u(4,i),u(5,i)
-            w(:,i)      = u2w(u(:,i))
-            Temp(i) = w(5,i)*gamma/w(1,i)
-            mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(Temp(i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+            if (low_mach_correction) then
+                read(1,*) ui(1),ui(2),ui(3),ui(4),ui(5)
+                q(:,i) = u2q(ui)
+                mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(q(5,i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+            else
+                read(1,*) u(1,i),u(2,i),u(3,i),u(4,i),u(5,i)
+                w(:,i)      = u2w(u(:,i))
+                Temp(i) = w(5,i)*gamma/w(1,i)
+                mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(Temp(i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+            end if
         end do
         close(1)
         

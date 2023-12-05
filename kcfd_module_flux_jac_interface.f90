@@ -2,13 +2,14 @@ module module_flux_jac_interface
 
     implicit none
     public :: interface_jac     !  compute a flux Jacobian at interior face.
-    public :: interface_jac_visc ! compute flux jacobian at interior face for viscous flux.
+    public :: interface_flux_viscous_prim ! compute flux jacobian at interior face for viscous flux with primative vars.
 contains
 
     subroutine interface_jac(wj, wk, njk, dFnduL, dFnduR, uR2L, uR2R )
         use derivative_data_df5
         use module_common_data, only : p2, zero, one, half
-        use module_input_parameter, only : inviscid_jac, low_mach_correction
+        use module_input_parameter, only : inviscid_jac, low_mach_correction, eps_weiss_smith, min_ref_vel, navier_stokes, &
+                                           pressure_dif_ws
         use flux_functions_ddt    , only :      roe_ddt, &
                                             rusanov_ddt, &
                                                 hll_ddt, &
@@ -33,7 +34,7 @@ contains
         real(p2), optional,         intent(in) :: uR2L, uR2R        ! preconditioner scaling factor
         integer :: i, ii
         type(derivative_data_type_df5), dimension(5) :: uL_ddt, uR_ddt, qL_ddt, qR_ddt
-        type(derivative_data_type_df5)               :: uR2L_ddt, uR2R_ddt
+        type(derivative_data_type_df5)               :: uR2L_ddt, uR2R_ddt, dp
 
         ! ! debugging
         ! real(p2) :: H,rho_T,rho_p, theta
@@ -55,7 +56,22 @@ contains
                     uL_ddt = q2u_ddt(qL_ddt)
                     uR_ddt = q2u_ddt(qR_ddt)
                 end if
-
+                dp =   ddt_abs(qR_ddt(1) - qL_ddt(1))  !Pressure difference
+                ! ddt_max doesn't like variable numbers of inputs... no problem...
+                ! uR2L_ddt = ddt_max(ddt_sqrt( qL_ddt(2)**2 + qL_ddt(3)**2 + qL_ddt(4)**2) , &
+                !                     ddt_max( pressure_dif_ws*ddt_sqrt(dp/uL_ddt(1))      , &
+                !                     ddt_max( eps_weiss_smith*qL_ddt(5),min_ref_vel) ) )
+                ! uR2R_ddt = ddt_max(ddt_sqrt(qR_ddt(2)**2 + qR_ddt(3)**2 + qR_ddt(4)**2) , &
+                !                     ddt_max( pressure_dif_ws*ddt_sqrt(dp/uR_ddt(1))     , &
+                !                     ddt_max(eps_weiss_smith*qR_ddt(5), min_ref_vel) ) )
+                uR2L_ddt = uR2L
+                uR2R_ddt = uR2R
+                if (navier_stokes) then
+                    ! uR2R_rec = max(uR2R_rec,)
+                    ! write(*,*) "low mach diffusive time scale not implemented"
+                end if
+                uR2L_ddt = ddt_min(uR2L_ddt,qL_ddt(5))**2 ! cap with the speed of sound
+                uR2R_ddt = ddt_min(uR2R_ddt,qR_ddt(5))**2
             else
                 ! No reconstruction
                 wL = wj
@@ -175,20 +191,72 @@ contains
             if (i==1) then
                 do ii = 1,5
                     do jj = 1,5
-                        dFnduL(ii,jj) = flux(i)%df(jj)
+                        dFnduL(ii,jj) = flux(ii)%df(jj)
                     end do
                 end do
             else
                 do ii = 1,5
                     do jj = 1,5
-                        dFnduR(ii,jj) = flux(i)%df(jj)
+                        dFnduR(ii,jj) = flux(ii)%df(jj)
                     end do
                 end do
             endif
         end do jac_L_R
     end subroutine interface_viscous_alpha_jacobian
 
-    subroutine interface_jac_visc(wL, wR, TL, TR, muL, muR, gradVelL, gradVelR, njk, delta_s, dFnduL, dFnduR)
+    subroutine interface_flux_viscous_prim(qL,qR,muL,muR,gradqL,gradqR,njk, x1,y1,z1, x2,y2,z2, dFnduL,dFnduR)
+        use module_common_data , only : p2
+        use flux_functions_ddt    , only : viscous_flux_primitive
+        use derivative_data_df5
+
+
+        implicit none
+        real(p2)                      , dimension(5)  , intent(in) :: qL, qR
+        real(p2)                      , dimension(5,3), intent(in) :: gradqL, gradqR
+        real(p2)                                      , intent(in) :: muL, muR
+        real(p2)                      , dimension(3)  , intent(in) :: njk
+        real(p2)                      ,                 intent(in) :: x1,y1,z1, x2,y2,z2
+
+        real(p2)                      , dimension(5,5), INTENT(OUT):: dFnduL,dFnduR
+        integer :: i, ii, jj
+        type(derivative_data_type_df5), dimension(5) :: qL_ddt, qR_ddt, uL_ddt, uR_ddt, flux
+
+        jac_L_R : do i = 1,2
+            ! No reconstruction
+            ! wL = wj
+            ! wR = wk
+            ! convert to conservative variables in ddt
+            qL_ddt = qL
+            qR_ddt = qR
+
+            ! determine which state the flux derivative is computed wrt
+            if (i == 1) then
+                ! Using derivative for uL_ddt
+                call ddt_seed(qL_ddt)
+            else ! i = 2
+                ! Using derivative for uR_ddt
+                call ddt_seed(qR_ddt)
+            end if
+
+            call viscous_flux_primitive(qL_ddt, qR_ddt, gradqL, gradqR, muL, muR, njk, x1,y1,z1, x2,y2,z2, flux)
+
+            if (i==1) then
+                do ii = 1,5
+                    do jj = 1,5
+                        dFnduL(ii,jj) = flux(ii)%df(jj)
+                    end do
+                end do
+            else
+                do ii = 1,5
+                    do jj = 1,5
+                        dFnduR(ii,jj) = flux(ii)%df(jj)
+                    end do
+                end do
+            endif
+        end do jac_L_R
+    end subroutine interface_flux_viscous_prim
+
+    subroutine interface_jac_visc_manual(wL, wR, TL, TR, muL, muR, gradVelL, gradVelR, njk, delta_s, dFnduL, dFnduR)
 
         ! This subroutine builds the interface flux jacobian as outlined in section 4.12 of I do like CFD.
         ! note: only spatial gradients normal to the face are evaluated any gradients wrt global coordinates
@@ -359,7 +427,7 @@ contains
             
         end do
 
-    end subroutine interface_jac_visc
+    end subroutine interface_jac_visc_manual
 
     !********************************************************************************
     ! Compute U from W (ddt version)

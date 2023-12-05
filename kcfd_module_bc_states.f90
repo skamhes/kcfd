@@ -48,6 +48,7 @@ contains
         
         use module_common_data     , only : p2, zero
         use module_ccfv_data_soln  , only : u2w, w2u
+        use module_input_parameter , only : low_mach_correction
         implicit none
 
         !Input
@@ -79,7 +80,11 @@ contains
                 gradwb(:,2:4) = gradwL(:,2:4)
             case('outflow_subsonic')
                 call back_pressure_visc(wL,wb)
-                gradwb(:,5) = gradwL(:,5)
+                if (low_mach_correction) then
+                    gradwb(:,1) = gradwL(:,5)
+                else
+                    gradwb(:,5) = gradwL(:,5)
+                endif
             case default
                 write(*,*) "Boundary condition=",trim(bc_state_type),"  not implemented."
                 write(*,*) " --- Stop at get_right_state() in kcfd_module_bc_states.f90..."

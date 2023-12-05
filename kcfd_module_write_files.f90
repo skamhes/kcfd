@@ -14,9 +14,9 @@ module module_write_files
             use module_common_data, only : filename_tecplot_b
             !To access the solution data.
             use module_ccfv_data_grid, only : cell, ncells, bound, bound_export
-            use module_ccfv_data_soln, only : w, ir, iu, iv, iw, ip, Temp, mu, gamma
+            use module_ccfv_data_soln, only : w, ir, iu, iv, iw, ip, Temp, mu, gamma,q
 
-            use module_input_parameter       , only : project_name, navier_stokes
+            use module_input_parameter       , only : project_name, navier_stokes, low_mach_correction
             use module_ccfv_gradient         , only : my_alloc_int_ptr
             
             implicit none 
@@ -51,7 +51,11 @@ module module_write_files
                     do k = 1,cell(bcell_i)%nvtx
                         wn(:,cell(bcell_i)%vtx(k)) = wn(:,cell(bcell_i)%vtx(k))  + w(:,bcell_i)
                         if (navier_stokes) then
-                            tn(  cell(bcell_i)%vtx(k)) = tn(  cell(bcell_i)%vtx(k))  + temp(bcell_i)
+                            if (low_mach_correction) then
+                                tn(  cell(bcell_i)%vtx(k)) = tn(  cell(bcell_i)%vtx(k))  + q(5,bcell_i)
+                            else
+                                tn(  cell(bcell_i)%vtx(k)) = tn(  cell(bcell_i)%vtx(k))  + temp(bcell_i)
+                            endif
                             mun(  cell(bcell_i)%vtx(k)) = mun(  cell(bcell_i)%vtx(k))  + mu(bcell_i)
                         end if
                         nc(cell(bcell_i)%vtx(k))   = nc(cell(bcell_i)%vtx(k)) + 1
@@ -234,11 +238,13 @@ module module_write_files
 
         subroutine write_data_file
             use module_ccfv_data_grid , only : ncells
-            use module_common_data, only : filename_data
-            use module_ccfv_data_soln, only : u, res_norm, res_norm_initial
+            use module_common_data, only : filename_data, p2
+            use module_ccfv_data_soln, only : u, res_norm, res_norm_initial, q, q2u
+            use module_input_parameter,only : low_mach_correction
             
             implicit none
             integer :: j, os
+            real(p2), dimension(5) :: uj
 
             !Open the output file.
             open(unit=8, file=filename_data, status="unknown", iostat=os)   
@@ -253,7 +259,12 @@ module module_write_files
                         res_norm_initial(3),res_norm_initial(4),res_norm_initial(5)
 
             do j = 1,ncells
-                write(8,'(5es25.15)')  u(1,j), u(2,j), u(3,j), u(4,j), u(5,j)
+                if (low_mach_correction) then 
+                    uj = q2u(q(:,j))
+                    write(8,'(5es25.15)')  uj(1), uj(2), uj(3), uj(4), uj(5)    
+                else
+                    write(8,'(5es25.15)')  u(1,j), u(2,j), u(3,j), u(4,j), u(5,j)
+                end if
             end do
             close(8)
 

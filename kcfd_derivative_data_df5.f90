@@ -239,6 +239,16 @@
   end interface
 
 !--------------------------------------------------------------------------------
+! Dot product operator
+! E.g.,   ddt_dot_product(ddt_variable1,ddt_variable2)
+
+  public :: ddt_dot_product
+  interface ddt_dot_product
+    module procedure d_dot_d
+    module procedure d_dot_r
+    module procedure r_dot_d
+  end interface
+!--------------------------------------------------------------------------------
 ! Square root operator
 ! E.g.,   ddt_sqrt(ddt_variable)
 
@@ -610,6 +620,53 @@
     tanh_d%df = (one - tanh(d%f)**2)*d%df
 
   end function tanh_d
+
+!*******************************************************************************
+! dot product
+!*******************************************************************************
+  pure function d_dot_d(d1, d2, n)
+  
+    integer                                    ,intent(in) :: n
+    type(derivative_data_type_df5),dimension(n),intent(in) :: d1, d2
+    type(derivative_data_type_df5)                         :: d_dot_d
+    integer :: i
+
+    d_dot_d = zero
+    do i = 1,n
+      d_dot_d = d_dot_d + d1(i) * d2(i)
+    end do
+
+  end function d_dot_d
+
+  pure function d_dot_r(d1, d2, n)
+    
+    integer                                    ,intent(in) :: n
+    type(derivative_data_type_df5),dimension(n),intent(in) :: d1
+    real(my_precision)            ,dimension(n),intent(in) :: d2
+    type(derivative_data_type_df5)                         :: d_dot_r
+    integer :: i
+
+    d_dot_r = zero
+    do i = 1,n
+      d_dot_r = d_dot_r + d1(i) * d2(i)
+    end do
+
+  end function d_dot_r
+
+  pure function r_dot_d(d1, d2, n)
+  
+    integer                                    ,intent(in) :: n
+    real(my_precision)            ,dimension(n),intent(in) :: d1
+    type(derivative_data_type_df5),dimension(n),intent(in) :: d2
+    type(derivative_data_type_df5)                         :: r_dot_d
+    integer :: i
+
+    r_dot_d = zero
+    do i = 1,n
+      r_dot_d = r_dot_d + d1(i) * d2(i)
+    end do
+
+  end function r_dot_d
 
 !*******************************************************************************
 ! Power: Let F=f1^f2. We want F'.

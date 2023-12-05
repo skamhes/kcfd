@@ -98,8 +98,8 @@ contains
                                            face_centroid(2,i), &
                                            face_centroid(3,i), & !<- face midpoint
                                             phi1,        phi2, & !<- Limiter functions
-                                    base_num_flux, wave_speed, &!<- Output)
-                                    uR2L=uR2(c1), uR2R=uR2(c2) ) 
+                                    base_num_flux, wave_speed)!, &!<- Output)
+                                    ! uR2L=uR2(c1), uR2R=uR2(c2) ) 
             else ! Regular
                 call interface_flux(          u1,       u2   , & !<- Left/right states
                                           gradw1,      gradw2, & !<- Left/right gradients
@@ -266,8 +266,8 @@ contains
                                             bface_centroid(2), &
                                             bface_centroid(3), & !<- boundary ghost cell "center"
                                             phi1,        phi2, & !<- Limiter functions
-                                    base_num_flux, wave_speed, & !<- Output)
-                                       uR2L=uR2(c1), uR2R=uR2b )
+                                    base_num_flux, wave_speed) !, & !<- Output)
+                                    !    uR2L=uR2(c1), uR2R=uR2b )
                 else
                     call interface_flux(          u1,      ub, & !<- Left/right states
                                         gradw1,        gradw2, & !<- Left/right gradients

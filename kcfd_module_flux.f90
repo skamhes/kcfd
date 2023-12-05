@@ -12,8 +12,8 @@ module module_flux
                               xm, ym, zm, phi1, phi2, num_flux, wsn, uR2L, uR2R )
         use module_common_data     , only : p2, zero
         use module_input_parameter , only : inviscid_flux !name of flux specified as input
-        use module_input_parameter , only : accuracy_order
-        use module_input_parameter , only : low_mach_correction
+        use module_input_parameter , only : accuracy_order, navier_stokes
+        use module_input_parameter , only : low_mach_correction, eps_weiss_smith, min_ref_vel, pressure_dif_ws
         use module_ccfv_data_soln  , only : u2w, w2u, q2u !variable conversion functions  
 
         implicit none
@@ -36,6 +36,10 @@ module module_flux
         real(p2), dimension(5) :: w1, w2 ! Primitive vars at centroids
         real(p2), dimension(5) :: wL, wR, qL, qR ! primitive vars reconstructed to face
         real(p2), dimension(5) :: uL, uR ! conservative vars computed from wL and wR
+        real(p2)               :: uR2L_rec, uR2R_rec ! Reconstructed uR2
+        real(p2)               :: dp ! difference in pressure, needed for low mach preconditioning
+        real(p2), dimension(3) :: ejk
+        REAL(P2)               :: mag_ejk ! step difference for VISCOUS U_REF
 
         if (low_mach_correction) then !(q1 = u1, q2 = u2)
             if (accuracy_order == 2) then
@@ -47,6 +51,21 @@ module module_flux
             end if
             uL = q2u(qL)
             uR = q2u(qR)
+            ! dp =   abs(qR(1) - qL(1))   !Pressure difference
+            ! uR2L_rec = max(sqrt(qL(2)**2 + qL(3)**2 + qL(4)**2),pressure_dif_ws*sqrt(dp/uL(1)), eps_weiss_smith*qL(5), min_ref_vel)
+            ! uR2R_rec = max(sqrt(qR(2)**2 + qR(3)**2 + qR(4)**2),pressure_dif_ws*sqrt(dp/uR(1)), eps_weiss_smith*qR(5), min_ref_vel)
+            ! if (navier_stokes) then
+            !     ! ! uR2R_rec = max(uR2R_rec,)
+            !     ! ejk = (/ xc2 - xc1, yc2 - yc1, zc2 - zc1 /)
+            !     ! mag_ejk = sqrt(ejk(1)**2 + ejk(2)**2 + ejk(3)**2)
+
+            !     ! uR2l_rec = max(uR2L_rec,mu1/uL(1)/mag_ejk)
+            !     ! uR2R_rec = max(uR2R_rec,mu2/uR(2)/mag_ejk)
+            ! end if
+            ! uR2L_rec = min(uR2L_rec,qL(5))**2 ! cap with the speed of sound
+            ! uR2R_rec = min(uR2R_rec,qR(5))**2
+            uR2L_rec = uR2L
+            uR2R_rec = uR2R
         else
             w1 = u2w(u1)
             w2 = u2w(u2)
@@ -68,21 +87,9 @@ module module_flux
         !------------------------------------------------------------
         if(trim(inviscid_flux)=="roe") then
             if (low_mach_correction) then
-                if (present(uR2L) .and. present(uR2R)) then
-                    call roe_low_mach(uL,uR,uR2L,uR2R,n12,num_flux,wsn)
-            !         write(*,*) "UR2L = ", uR2L, "UR2R = ", uR2R
-            !         write(*,*) "Low Mach:", num_flux(:)
-            !         write(*,*) "Low Mach WSN:", wsn
-                else
-                    write(*,*) "uR2L and/or uR2R not present. Stop!"
-                    stop
-                end if
+                    call roe_low_mach(uL,uR,uR2L_rec,uR2R_rec,n12,num_flux,wsn)
             else
                 call roe(uL,uR,n12, num_flux,wsn)
-            !     write(*,*) " No Prec:", num_flux(:)
-            !     write(*,*) " No Mach WSN:", wsn
-            !     write(*,*)
-
             end if
         ! !------------------------------------------------------------
         ! Other fluxes not yet implemneted.
@@ -506,6 +513,82 @@ module module_flux
         
     end subroutine viscous_flux
 
+    subroutine viscous_flux_primitive(q1,q2,gradq1,gradq2,mu1,mu2,n12,xc1,yc1,zc1,xc2,yc2,zc2, visc_flux)
+        use module_common_data, only : p2, half, one, zero
+        use module_ccfv_data_soln, only : gamma, w2u
+        use module_input_parameter, only : Pr
+
+
+        implicit none
+
+        real(p2), dimension(5),     intent(in) :: q1, q2
+        real(p2), dimension(3,5),   intent(in) :: gradq1, gradq2
+        real(p2),                   intent(in) :: mu1, mu2
+        real(p2), dimension(3),     intent(in) :: n12               ! Unit area vector (from c1 to c2)
+        real(p2),                   intent(in) :: xc1, yc1, zc1     ! Left cell centroid
+        real(p2),                   intent(in) :: xc2, yc2, zc2     ! Right cell centroid
+        real(p2), dimension(5),     INTENT(OUT):: visc_flux
+        
+        
+        ! local vars
+        real(p2), dimension(3,3)    :: face_gradq, gradQ, tau
+        real(p2), dimension(3)      :: face_gradT, ds, dsds2, delU, q_face
+        ! face_gradT = [dTdx dTdy dTdz]
+        real(p2)                    :: mu_face, heat_conductivity
+        real(p2), dimension(5)      :: u1, u2
+        real(p2)                    :: theta_1, theta_2, theta_3
+
+        integer                     :: i, iu
+        
+        real(p2), dimension(3) :: grad_uL, grad_vL, grad_wL, grad_TL, grad_pL
+        real(p2), dimension(3) :: grad_uR, grad_vR, grad_wR, grad_TR, grad_pR
+
+        ! Calculate the face gradients
+        ds = (/xc2-xc1, yc2-yc1, zc2-zc1/) ! vector pointing from center of cell 1 to cell 2
+        dsds2 = ds/(ds(1)**2 + ds(2)**2 + ds(3)**2) ! ds/ds^2
+
+        grad_pL = gradq1(:,1)
+        grad_uL = gradq1(:,2)
+        grad_vL = gradq1(:,3)
+        grad_wL = gradq1(:,4)
+        grad_TL = gradq1(:,5)
+
+        grad_pR = gradq2(:,1)
+        grad_uR = gradq2(:,2)
+        grad_vR = gradq2(:,3)
+        grad_wR = gradq2(:,4)
+        grad_TR = gradq2(:,5)
+        
+        do iu = 1,3
+            ! delU = delU_bar + [dU - dot(delU_bar,ds)]*ds/ds^2
+            ! delU_bar is the arithmetic mean of the left and right gradients.  In order to prevent checkerboarding on certain 
+            ! grids the gradient along the vector ds is replaced with a central difference.
+            delU = half * (gradq1(:,iu+1) + gradq2(:,iu+1))
+            face_gradq(iu,:) = delU + ((q2(iu+1) - q1(iu+1)) - dot_product(delU,ds) ) * dsds2
+        end do
+        
+        
+        delU = half * (gradq1(:,5) + gradq2(:,5))
+        face_gradT(:) = delU + ((q2(5) - q1(5)) - dot_product(delU,ds) ) * dsds2
+        mu_face = half * (mu1 + mu2) ! mu = M_inf*mu_ND/Re_inf
+        tau = compute_tau(face_gradq,mu_face)
+        heat_conductivity = mu_face/((gamma - one) * Pr)
+        q_face = half * (q1(2:4) + q2(2:4)) ! three face velocities
+
+        theta_1 = -(q_face(1)*tau(1,1) + q_face(2)*tau(2,1) + q_face(3)*tau(3,1)) + heat_conductivity * face_gradT(1)
+        theta_2 = -(q_face(1)*tau(1,2) + q_face(2)*tau(2,2) + q_face(3)*tau(3,2)) + heat_conductivity * face_gradT(2)
+        theta_3 = -(q_face(1)*tau(1,3) + q_face(2)*tau(2,3) + q_face(3)*tau(3,3)) + heat_conductivity * face_gradT(3)
+
+
+        visc_flux(1) = zero
+        visc_flux(2) = -(n12(1)*tau(1,1) + n12(2)*tau(1,2) + n12(3)*tau(1,3))
+        visc_flux(3) = -(n12(1)*tau(2,1) + n12(2)*tau(2,2) + n12(3)*tau(2,3))
+        visc_flux(4) = -(n12(1)*tau(3,1) + n12(2)*tau(3,2) + n12(3)*tau(3,3))
+        visc_flux(5) = n12(1)*theta_1  + n12(2)*theta_2  + n12(3)*theta_3
+
+        
+    end subroutine viscous_flux_primitive
+
     subroutine viscous_bflux(w1,wb,T1,Tb,mu1, xc1,yc1,zc1, xb,yb,zb, bn1,bn2, bface_nrml_mag,unit_face_normal,viscous_flux_boundary)
         use module_common_data, only : p2, half, one, zero, x, y, z
         use module_ccfv_data_soln, only : gamma
@@ -564,8 +647,8 @@ module module_flux
     subroutine compute_viscosity
         use module_common_data, only : p2, one
         use module_ccfv_data_grid, only : ncells
-        use module_input_parameter, only : M_inf, Reynolds, C_0, Freestream_Temp
-        use module_ccfv_data_soln, only : Temp, mu
+        use module_input_parameter, only : M_inf, Reynolds, C_0, Freestream_Temp, low_mach_correction
+        use module_ccfv_data_soln, only : Temp, mu, q
         
         implicit none
         integer :: i
@@ -574,7 +657,11 @@ module module_flux
         scaling_factor = M_inf/Reynolds
 
         do i = 1,ncells
-            mu = scaling_factor * ( (one + ( C_0/Freestream_Temp ) )/(Temp(i) + ( C_0/Freestream_Temp )) ) * (Temp(i) ** 1.5_p2)
+            if (low_mach_correction) then
+                mu(i) =scaling_factor*( (one + ( C_0/Freestream_Temp ) )/(q(5,i) + ( C_0/Freestream_Temp )) ) * (q(5,i) ** 1.5_p2)
+            else
+                mu(i) =scaling_factor*( (one + ( C_0/Freestream_Temp ) )/(Temp(i) + ( C_0/Freestream_Temp )) ) * (Temp(i) ** 1.5_p2)
+            endif
         end do
         
     end subroutine compute_viscosity
@@ -908,25 +995,25 @@ module module_flux
 
             use module_common_data, only : p2, one, two, half, zero
             use module_ccfv_data_soln , only : gamma
-            use module_input_parameter, only : eig_limiting_factor
-           
+            use module_input_parameter, only : eig_limiting_factor, solver_type, entropy_fix
+
             implicit none
-           
+
             !Input
             real(p2), dimension(5), intent( in) :: ucL !Left  state in conservative variables.
             real(p2), dimension(5), intent( in) :: ucR !Right state in conservative variables.
             real(p2),               intent( in) :: uR2L, uR2R ! Left and right scaling terms
             real(p2), dimension(3), intent( in) :: njk
-           
+
             !Output
             real(p2), dimension(5)  , intent(out) :: num_flux !Numerical viscous flux
             real(p2),                 intent(out) :: wsn      !Max wave speed
-           
+
             !Local variables
             !            L = Left
             !            R = Right
             ! No subscript = Roe average
-           
+
             real(p2) :: nx, ny, nz             ! Normal vector components
             real(p2) :: uL, uR, vL, vR, wL, wR ! Velocity components.
             real(p2) :: rhoL, rhoR, pL, pR     ! Primitive variables.
@@ -934,13 +1021,13 @@ module module_flux
             real(p2) :: aL, aR, HL, HR         ! Speed of sound, Total enthalpy
             real(p2), dimension(5)   :: fL     ! Physical flux evaluated at ucL
             real(p2), dimension(5)   :: fR     ! Physical flux evaluated at ucR
-           
+
             real(p2) :: RT                     ! RT = sqrt(rhoR/rhoL)
             real(p2) :: rho,u,v,w,H,a,qn,p     ! Roe-averages
-           
+
             real(p2) :: drho, dqn, dp          ! Differences in rho, qn, p, e.g., dp=pR-pL
             real(p2) :: drhou, drhov, drhow, drhoE ! Differences in conserved vars
-            real(p2) :: absU
+            real(p2) :: absU, ws2, ws3         ! accoustic wave speeds |u'+c'| and |u'-c'|
             real(p2) :: uprime, cprime, alpha, beta, uR2
             real(p2) :: cstar, Mstar, delu, delp
             real(p2), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
@@ -1032,7 +1119,7 @@ module module_flux
                drhov = ucR(3) - ucL(3)
                drhow = ucR(4) - ucL(4)
                drhoE = ucR(5) - ucL(5)
-               absU  = abs(qn)
+               absU  = abs(qn) ! wave speed one
             !    ! Entropy fix? I guess not....... Need to investigate more
             !     if (absU < 0.1_p2 * a) then
             !         ! if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
@@ -1045,8 +1132,26 @@ module module_flux
               cprime = sqrt((alpha**2) * (qn**2) + uR2)
               uprime = qn * (one - alpha)
 
-               cstar = half * (abs(uprime + cprime) + abs(uprime - cprime))
-               Mstar = half * (abs(uprime + cprime) - abs(uprime - cprime)) / cprime
+              ws2 = abs(uprime + cprime)
+              ws3 = abs(uprime - cprime)
+
+            !   if (solver_type == 'implicit') then
+                ! Entropy fix, only for the implicit solver...
+            if (entropy_fix == 'harten') then
+                dws(:) = eig_limiting_factor(1:4)*a
+                if (absU < dws(3))  absU = half * ( (absU**2)/(dws(3)*a) + (dws(3)*a) )
+                if (ws2  < dws(1))  ws2  = half * ( (ws2**2) /(dws(1)*a) + (dws(1)*a) )
+                if (ws3  < dws(2))  ws3  = half * ( (ws3**2) /(dws(2)*a) + (dws(2)*a) )
+            elseif (entropy_fix == 'mavriplis') then
+                ! https://doi.org/10.2514/6.2007-3955
+                absU = max(absU,eig_limiting_factor(3)*ws2)
+                ! ws2 = max(ws2,eig_limiting_factor(1)*ws2) ! not needed
+                ws3 = max(ws3,eig_limiting_factor(1)*ws2)
+            endif
+
+              cstar = half * (ws2 + ws3)
+              Mstar = half * (ws2 - ws3) / cprime
+
 
                 delu = Mstar*dqn + (cstar - (one-two*alpha)*absU - alpha*qn*Mstar)*(dp/(rho*uR2))
                 delp = Mstar*dp  + (cstar - absU + alpha*qn*Mstar) * rho * dqn

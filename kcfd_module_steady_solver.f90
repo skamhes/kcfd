@@ -233,7 +233,7 @@ contains
                 end if
                 
                 q(:,i) = q0(:,i) - (dtau(i)/cell(i)%vol) * matmul( pre_inv,res(:,i) )
-                w(:,i) = q2w(u(:,i))
+                w(:,i) = q2w(q(:,i))
             else
                 u(:,i) = u0(:,i) - (dtau(i)/cell(i)%vol) * res(:,i) ! u*
                 w(:,i) = u2w(u(:,i))
