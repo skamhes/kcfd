@@ -338,7 +338,7 @@
   subroutine roe_low_mach_ddt(ucL, ucR, uR2L, uR2R, njk, num_flux,dFdU,wsn)
 
     use derivative_data_df5
-    use module_input_parameter, only : eig_limiting_factor, entropy_fix
+    use module_input_parameter, only : eig_limiting_factor, entropy_fix, min_ref_vel, pressure_dif_ws
    
     implicit none
     integer , parameter :: p2 = selected_real_kind(15) ! Double precision
@@ -386,6 +386,7 @@
     type(derivative_data_type_df5) :: absU, ws2,ws3          ! Convective and +/- accoustic wave speeds
     type(derivative_data_type_df5) :: uprime, cprime, alpha, beta
     type(derivative_data_type_df5) :: uR2L_ddt, uR2R_ddt, uR2
+    type(derivative_data_type_df5) :: T, rho_p, rho_T
     ! real(p2)                       :: uR2
     type(derivative_data_type_df5) :: cstar, Mstar, delu, delp
     type(derivative_data_type_df5), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
@@ -451,16 +452,27 @@
    !        the Roe-averaged density.
    
        
-     rho = half * (rhoR + rhoL)                         !Arithemtic-averaged density
-     u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
-     v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
-     w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
-     H = half * (HL   + hR  )                           !Arithemtic-averaged total enthalpy
-     p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
-     a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
-    qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
-   uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
+    !  rho = half * (rhoR + rhoL)                         !Arithemtic-averaged density
+    !  u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
+    !  v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
+    !  w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
+    !  H = half * (HL   + hR  )                           !Arithemtic-averaged total enthalpy
+    !  p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
+    !  a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
+    ! qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
+    ! uR2 = half * (uR2L + uR2R)                !Arithmetic-averaged scaling term
    
+    ! ! Roe averages
+    RT = ddt_sqrt(rhoR/rhoL)
+    rho = RT*rhoL                                        !Roe-averaged density
+    u = (uL + RT*uR)/(one + RT)                        !Roe-averaged x-velocity
+    v = (vL + RT*vR)/(one + RT)                        !Roe-averaged y-velocity
+    w = (wL + RT*wR)/(one + RT)                        !Roe-averaged z-velocity
+    H = (HL + RT*HR)/(one + RT)                        !Roe-averaged total enthalpy
+    p = (pL + RT*pR)/(one + RT)                        !Roe-averaged pressure
+    a = ddt_sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Roe-averaged speed of sound
+    qn = u*nx + v*ny + w*nz                             !Roe-averaged face-normal velocity
+    uR2 = (uR2L + RT*uR2R)/(one + RT)                  !Roe-averaged uR2
 
    !Wave Strengths
    
@@ -468,13 +480,19 @@
         dp =   pR - pL   !Pressure difference
        dqn =  qnR - qnL  !Normal velocity difference
 
+      !  uR2 = ddt_min( a, ddt_max( ddt_abs(qn) , ddt_max(pressure_dif_ws*ddt_sqrt(ddt_abs(dp)/rho), min_ref_vel ) ) )
+
        drhou = ucR(2) - ucL(2)
        drhov = ucR(3) - ucL(3)
        drhow = ucR(4) - ucL(4)
        drhoE = ucR(5) - ucL(5)
        absU  = ddt_abs(qn)
       
-        beta = rho/(gamma*p)
+        ! beta = rho/(gamma*p)
+           T = gamma * P / rho
+       rho_p = gamma/T
+       rho_T = - (p * gamma) / ( T**2 )
+        beta = rho_p + rho_T * (gamma - 1) / (rho)
        alpha = half * (one-beta*uR2)
       cprime = ddt_sqrt((alpha**2) * (qn**2) + uR2)
       uprime = qn * (one - alpha)
@@ -507,6 +525,12 @@
         diss_cartesian(:,4) = (absU * drhow + delu * rho * w) * njk
         diss_cartesian(:,5) = (absU * drhoE + delu * rho * H) * njk
 
+ 
+        diss_cartesian(1,2) = diss_cartesian(1,2) + delp
+        diss_cartesian(2,3) = diss_cartesian(2,3) + delp
+        diss_cartesian(3,4) = diss_cartesian(3,4) + delp
+        diss_cartesian(:,5) = diss_cartesian(:,5) + delp * (/ u , v , w /)
+        
         ! Equivalent of matrix multiplication for the ddt type
         diss(1) = diss_cartesian(1,1)*njk(1) + diss_cartesian(2,1)*njk(2) + diss_cartesian(3,1)*njk(3)
         diss(2) = diss_cartesian(1,2)*njk(1) + diss_cartesian(2,2)*njk(2) + diss_cartesian(3,2)*njk(3)
@@ -514,15 +538,14 @@
         diss(4) = diss_cartesian(1,4)*njk(1) + diss_cartesian(2,4)*njk(2) + diss_cartesian(3,4)*njk(3)
         diss(5) = diss_cartesian(1,5)*njk(1) + diss_cartesian(2,5)*njk(2) + diss_cartesian(3,5)*njk(3)
 
-        ! now add the final term
-        ! diss(1) += 0
-        diss(2) = diss(2) + delp * nx
-        diss(3) = diss(3) + delp * ny
-        diss(4) = diss(4) + delp * nz
-        diss(5) = diss(5) + delp * qn
+        ! ! now add the final term
+        ! ! diss(1) += 0
+        ! diss(2) = diss(2) + delp * nx
+        ! diss(3) = diss(3) + delp * ny
+        ! diss(4) = diss(4) + delp * nz
+        ! diss(5) = diss(5) + delp * qn
 
    ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
-   
      numerical_flux = half * (fL + fR - diss)
    
    !--------------

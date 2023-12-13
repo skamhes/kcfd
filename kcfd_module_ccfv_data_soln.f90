@@ -28,7 +28,9 @@ module module_ccfv_data_soln
     real(p2), dimension(:,:)  , pointer :: w     !primitive variables at cells/nodes.
     real(p2), dimension(:,:)  , pointer :: q     ! low-mach primitive variables at cells/nodes (no rho since flow is ~incompr.).
     real(p2), dimension(:,:,:), pointer :: gradw !gradients of w at cells/nodes.
+    real(p2), dimension(:,:,:), pointer :: gradw_w !weighted gradients of w at cells/nodes.
     real(p2), dimension(:,:,:), pointer :: gradq !gradients of q at cells/nodes.
+    real(p2), dimension(:,:,:), pointer :: gradq_w !weightedgradients of q at cells/nodes.
 
     real(p2), dimension(:), allocatable :: Temp  ! Temperature (only used for Navier stokes EQ)
     real(p2), dimension(:), allocatable :: mu    ! Viscosity
@@ -131,7 +133,7 @@ contains
         if (low_mach_correction) then
             allocate(gradq(3,nq,ncells))
             gradq = zero
-            allocate( gradw(3,nq,ncells) )
+            if (navier_stokes) allocate( gradq_w(3,nq,ncells) )
         else
             allocate( gradw(3,nq,ncells) )
             gradw = zero
@@ -140,6 +142,7 @@ contains
                 ! Initialization
                 gradT = zero
             end if
+            if (navier_stokes) allocate( gradw_w(3,nq,ncells) )
         end if
 
         !------------------------------------------------------
@@ -224,7 +227,7 @@ contains
     subroutine load_data_file
         use module_ccfv_data_grid , only : ncells
         use module_common_data, only : filename_data, p2, one, pi
-        use module_input_parameter, only : M_inf, aoa, sideslip, Reynolds, C_0, Freestream_Temp, low_mach_correction
+        use module_input_parameter, only : M_inf, aoa, sideslip, Reynolds, C_0, Freestream_Temp, low_mach_correction, navier_stokes
         
         implicit none
 
@@ -257,12 +260,16 @@ contains
             if (low_mach_correction) then
                 read(1,*) ui(1),ui(2),ui(3),ui(4),ui(5)
                 q(:,i) = u2q(ui)
-                mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(q(5,i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+                if (navier_stokes) then
+                    mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(q(5,i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+                endif
             else
                 read(1,*) u(1,i),u(2,i),u(3,i),u(4,i),u(5,i)
                 w(:,i)      = u2w(u(:,i))
                 Temp(i) = w(5,i)*gamma/w(1,i)
-                mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(Temp(i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+                if (navier_stokes) then
+                    mu(i) = (M_inf/Reynolds) * ( (one + ( C_0/Freestream_Temp ) )/(Temp(i) + ( C_0/Freestream_Temp )) ) ** 1.5_p2
+                endif
             end if
         end do
         close(1)

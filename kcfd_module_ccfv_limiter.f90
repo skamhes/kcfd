@@ -13,7 +13,7 @@ contains
     subroutine compute_limiter
         use module_common_data   , only : p2, zero, x, y, z
         use module_ccfv_data_grid, only : ncells, cell
-        use module_ccfv_data_soln, only : gradw, w
+        use module_ccfv_data_soln, only : gradw, w, gradq
       
         use module_ccfv_gradient , only : cclsq
         implicit none

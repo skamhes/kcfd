@@ -11,6 +11,7 @@ module module_ccfv_gradient
     public :: my_alloc_int_ptr
     public :: perturbation_gradient
     public :: perturbation_gradient_boundary
+    public :: compute_weighted_gradient
 
     !------------------------------------------------------------------------------------
     !------------------------------------------------------------------------------------
@@ -32,6 +33,7 @@ module module_ccfv_gradient
 
     !Cell data array in the custom data type.
     type(cc_lsq_data_type), dimension(:), pointer :: cclsq  !cell-centered LSQ array
+    type(cc_lsq_data_type), dimension(:), pointer :: cclsq_w  !cell-centered LSQ array
 
     !E.g., # of nghbrs at cell i = cclsq(i)%nnghbrs_lsq 
     !      a list of nghbrs at cell i = cclsq(i)%nghbr_lsq(1:cclsq(i)%nnghbrs_lsq)
@@ -90,6 +92,50 @@ contains
 
         ! compute the gradient for each of the primitive variables
     end subroutine compute_gradient
+    
+    subroutine compute_weighted_gradient
+        use module_common_data   , only : zero, p2
+        use module_ccfv_data_grid, only : ncells
+        use module_ccfv_data_soln, only : gradw_w, w, p_inf, gradq_w, q
+        use module_input_parameter, only: gauge_pressure, low_mach_correction
+        
+        implicit none
+        !real(p2), dimension(3,5,32)   :: local_gradw ! debugging
+        real(p2) :: wi, wk, qi, qk
+        integer  :: ivar, i, k, nghbr_cell
+        
+        if (low_mach_correction) then
+            cell_loop_prim : do i = 1,ncells
+                var_loop_prim : do ivar = 1,5
+                    qi = q(ivar,i)
+                    nghbr_loop_prim : do k = 1,cclsq(i)%nnghbrs_lsq
+                        nghbr_cell = cclsq(i)%nghbr_lsq(k)
+                        qk = q(ivar,nghbr_cell)
+                        gradq_w(1,ivar,i) = gradq_w(1,ivar,i) + cclsq(i)%cx(k)*(qk-qi)
+                        gradq_w(2,ivar,i) = gradq_w(2,ivar,i) + cclsq(i)%cy(k)*(qk-qi)
+                        gradq_w(3,ivar,i) = gradq_w(3,ivar,i) + cclsq(i)%cz(k)*(qk-qi)
+                    end do nghbr_loop_prim
+                end do var_loop_prim
+            end do cell_loop_prim
+        else
+            cell_loop : do i = 1,ncells
+                var_loop : do ivar = 1,5
+                    wi = w(ivar,i)
+                    if (ivar == 5) wi = wi - p_inf + gauge_pressure
+                    nghbr_loop : do k = 1,cclsq(i)%nnghbrs_lsq
+                        nghbr_cell = cclsq(i)%nghbr_lsq(k)
+                        wk = w(ivar,nghbr_cell)
+                        if (ivar == 5) wk = wk - p_inf + gauge_pressure
+                        gradw_w(1,ivar,i) = gradw_w(1,ivar,i) + cclsq(i)%cx(k)*(wk-wi)
+                        gradw_w(2,ivar,i) = gradw_w(2,ivar,i) + cclsq(i)%cy(k)*(wk-wi)
+                        gradw_w(3,ivar,i) = gradw_w(3,ivar,i) + cclsq(i)%cz(k)*(wk-wi)
+                    end do nghbr_loop
+                end do var_loop
+            end do cell_loop
+        end if
+
+        ! compute the gradient for each of the primitive variables
+    end subroutine compute_weighted_gradient
 
     subroutine perturbation_gradient(gradw_orig1,gradw_orig2,ivar,ci,ck,u_perturb,grad_perturb1,grad_perturb2)
         use module_common_data , only : zero, p2
@@ -243,6 +289,7 @@ contains
     subroutine construct_vertex_stencil
         use module_common_data   , only : nnodes
         use module_ccfv_data_grid, only : cell, ncells
+        use module_input_parameter,only : navier_stokes
 
         implicit none
 
@@ -311,6 +358,7 @@ contains
         !Allocate and initialize the LSQ (custom data) array.
 
         allocate(cclsq(ncells))
+        if (navier_stokes) allocate(cclsq_w(ncells))
 
         ! Initialize it
         do i = 1,ncells
@@ -367,6 +415,10 @@ contains
             max_nghbrs     = max(max_nghbrs, icount)
             nghbrs(icount) = nghbrs(icount) + 1
         end do cell_loop
+
+        ! Allocate weighted lsq structure if navier_stokes
+        if (navier_stokes) cclsq_w = cclsq
+
         ! Deallocate 'node' as we don't need it any more.
 
         deallocate( node )
@@ -390,6 +442,7 @@ contains
     subroutine compute_lsq_coefficients
         use module_common_data   , only : p2, zero, one, two
         use module_ccfv_data_grid, only : cell, ncells
+        use module_input_parameter,only : navier_stokes
 
         implicit none
 
@@ -397,9 +450,9 @@ contains
         integer                           :: m, n             !Size of LSQ matrix: A(m,n).
         real(p2), pointer, dimension(:,:) :: a                !LSQ matrix: A(m,n).
         real(p2), pointer, dimension(:,:) :: rinvqt           !Pseudo inverse R^{-1}*Q^T
-        real(p2)                          :: dx, dy, dz, weight_k, lsq_weight_invdis_power
+        real(p2)                          :: dx, dy, dz, weight_k!,lsq_weight_invdis_power
         real(p2)                          :: maxdx, maxdy, maxdz
-        integer                           :: ix, iy, iz
+        integer                           :: ix, iy, iz, lsq_weight_invdis_power
         real(p2), dimension(3)            :: maxDeltasNZ
 
         real(p2)                          :: xk, yk, zk, xi, yi, zi, wx, wy, wz
@@ -431,7 +484,7 @@ contains
         ! instability known for Euler solvers. So, this is the unweighted LSQ gradient.
         ! More accurate gradients are obtained with 1.0, and such can be used for the
         ! viscous terms and source terms in turbulence models.
-        lsq_weight_invdis_power = 0.0_p2
+        lsq_weight_invdis_power = 0
          
         !--------------------------------------------------------------------------------
         !--------------------------------------------------------------------------------
@@ -482,7 +535,7 @@ contains
                 dx = cell(nghbr_cell)%xc - cell(i)%xc
                 dy = cell(nghbr_cell)%yc - cell(i)%yc
                 dz = cell(nghbr_cell)%zc - cell(i)%zc
-                weight_k = one / sqrt( dx**2 + dy**2 )**lsq_weight_invdis_power
+                weight_k = one / sqrt( dx**2 + dy**2 + dz**2 )**lsq_weight_invdis_power
                 cclsq(i)%cx(k)  = rinvqt(ix,k) * weight_k
                 cclsq(i)%cy(k)  = rinvqt(iy,k) * weight_k
                 cclsq(i)%cz(k)  = rinvqt(iz,k) * weight_k
@@ -491,6 +544,72 @@ contains
             ! Deallocate a and rinvqt, whose size may change in the next cell. 
             deallocate(a, rinvqt)
         end do cell_loop
+
+        lsq_weight_invdis_power = 1
+
+        if (navier_stokes) then
+            !--------------------------------------------------------------------------------
+            !--------------------------------------------------------------------------------
+            ! Compute the LSQ coefficients (cx,cy,cz) in all cells.
+            cell_loop_w : do i = 1,ncells
+                ! Define the LSQ problem size
+                m = cclsq_w(i)%nnghbrs_lsq  ! # of nghbrs
+                n = 3                     ! # of derivatives (unknowns = 3, (ux,uy,uz) in 3D)
+                ! Allocate LSQ matrix and the pseudo inverse, R^{-1}*Q^T
+                allocate(a(m,n)) ! note: it may produce some additional speed to switch the rows and columns here
+                ! however a is a very small matrix and this subroutine is called once so we'll leave that for another day
+                allocate(rinvqt(n,m))
+                ! Initialize a
+                a = zero
+                !-------------------------------------------------------
+                ! Build the weighted-LSQ matrix A(m,n).
+                !
+                !     weight_1 * [ (x1-xi)*wxi + (y1-yi)*wyi + (z1-zi)*wzi ] = weight_1 * [ w1 - wi ]
+                !     weight_2 * [ (x2-xi)*wxi + (y2-yi)*wyi + (z2-zi)*wzi ] = weight_2 * [ w2 - wi ]
+                !                 .
+                !                 .
+                !     weight_m * [ (xm-xi)*wxi + (ym-yi)*wyi + (zm-zi)*wzi ] = weight_2 * [ wm - wi ]
+                nghbr_loop_w : do k = 1, m
+                    nghbr_cell = cclsq_w(i)%nghbr_lsq(k) !Neighbor cell number
+                    dx = cell(nghbr_cell)%xc - cell(i)%xc
+                    dy = cell(nghbr_cell)%yc - cell(i)%yc
+                    dz = cell(nghbr_cell)%zc - cell(i)%zc
+                    weight_k = one / sqrt( dx**2 + dy**2 + dz**2 )**lsq_weight_invdis_power
+                    a(k,1) = weight_k*dx
+                    a(k,2) = weight_k*dy
+                    a(k,3) = weight_k*dz
+                    maxdx  = max(abs(dx),maxdx)
+                    maxdy  = max(abs(dy),maxdy)
+                    maxdz  = max(abs(dz),maxdz)
+                end do nghbr_loop_w
+                !-------------------------------------------------------
+                ! Perform QR factorization and compute R^{-1}*Q^T from A(m,n).
+                call qr_factorization(a,rinvqt,m,n)
+
+                !-------------------------------------------------------
+                ! Compute and store the LSQ coefficients: R^{-1}*Q^T*w.
+                !
+                ! (wx,wy,wz) = R^{-1}*Q^T*RHS
+                !            = sum_k (cx,cy,cz)*(wk-wi).
+
+                nghbr_loop2_w : do k = 1, m
+                    nghbr_cell = cclsq_w(i)%nghbr_lsq(k)
+                    dx = cell(nghbr_cell)%xc - cell(i)%xc
+                    dy = cell(nghbr_cell)%yc - cell(i)%yc
+                    dz = cell(nghbr_cell)%zc - cell(i)%zc
+                    weight_k = one / sqrt( dx**2 + dy**2 + dz**2 )**lsq_weight_invdis_power
+                    cclsq_w(i)%cx(k)  = rinvqt(ix,k) * weight_k
+                    cclsq_w(i)%cy(k)  = rinvqt(iy,k) * weight_k
+                    cclsq_w(i)%cz(k)  = rinvqt(iz,k) * weight_k
+                end do nghbr_loop2_w
+                !-------------------------------------------------------
+                ! Deallocate a and rinvqt, whose size may change in the next cell. 
+                deallocate(a, rinvqt)
+            end do cell_loop_w
+        endif
+
+
+
 
         ! Verification
         ! Compute the gradient of w = 2*x+y+4*z to se if we get wx = 2, wy = 1, and wz = 4 correctly
@@ -530,6 +649,36 @@ contains
                     write(*,*) " wz = ", wz, " exact uz = 4.0"!, maxDeltasNZ(3)*abs(wz-4.0_p2),maxDeltasNZ(3)
                     verification_error = .true.
             end if
+
+            if (navier_stokes) then
+                wx = zero
+                wy = zero
+                wz = zero
+                ! look over the vertex neighboes
+                do k = 1,cclsq_w(i)%nnghbrs_lsq
+                    nghbr_cell = cclsq_w(i)%nghbr_lsq(k)
+                    xk = cell(nghbr_cell)%xc
+                    yk = cell(nghbr_cell)%yc
+                    zk = cell(nghbr_cell)%zc
+                    ! This is how we use the LSQ coefficients: accumulate cx*(wk-wi)
+                    ! and cy*(wk-wi) and cz*(wk-wi)
+                    wx = wx + cclsq_w(i)%cx(k)*( (2.0*xk+yk+4.0*zk)-(2.0*xi+yi+4.0*zi) )
+                    wy = wy + cclsq_w(i)%cy(k)*( (2.0*xk+yk+4.0*zk)-(2.0*xi+yi+4.0*zi) )
+                    wz = wz + cclsq_w(i)%cz(k)*( (2.0*xk+yk+4.0*zk)-(2.0*xi+yi+4.0*zi) )
+                end do
+                maxDeltasNZ = zero
+                if (maxdx > 0.001_p2) maxDeltasNZ(1) = one
+                if (maxdy > 0.001_p2) maxDeltasNZ(2) = one
+                if (maxdz > 0.001_p2) maxDeltasNZ(3) = one
+                if ( maxDeltasNZ(1)*abs(wx-two) > 1.0e-06_p2 .or. &
+                    maxDeltasNZ(2)*abs(wy-one) > 1.0e-06_p2 .or. &
+                    maxDeltasNZ(3)*abs(wz-4.0_p2) > 1.0e-06_p2) then
+                        write(*,*) " weighted wx = ", wx, " exact ux = 2.0"!,maxDeltasNZ(1)*abs(wx-two)
+                        write(*,*) " weighted wy = ", wy, " exact uy = 1.0"!,maxDeltasNZ(2)*abs(wy-one)
+                        write(*,*) " weighted wz = ", wz, " exact uz = 4.0"!, maxDeltasNZ(3)*abs(wz-4.0_p2),maxDeltasNZ(3)
+                        verification_error = .true.
+                end if
+            endif
         end do
         if (verification_error) then
 

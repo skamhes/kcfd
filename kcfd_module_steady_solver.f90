@@ -335,7 +335,7 @@ contains
         use module_numerical_jacobian, only:compute_numerical_jacobian
         use module_common_data     , only : p2, du
         use module_ccfv_data_grid  , only : ncells
-        use module_ccfv_data_soln  , only : u, w, u2w, u2q, q2u, q, q2w
+        use module_ccfv_data_soln  , only : u, w, u2w, u2q, q2u, q, q2w, res
         use module_linear_solver   , only : linear_relaxation
         implicit none
         integer         :: i
@@ -361,21 +361,12 @@ contains
                 ! du <=> dq
                 omegan = safety_factor_primative(q(:,i),du(:,i))
                 q(:,i) = q(:,i) + omegan*matmul(var_ur_array,du(:,i))
-                ! q = u2q( u(:,i) )
-                ! dq = du(:,i) ! in this case q <---> u (sorta... Probably gonna wanna rewrite this at some point...)
+                
+                if (any(isnan(res(:,i))) .or. any(isnan(du(:,i)))) then 
+                    write (*,*) "nan value present cell = ",i," - press [Enter] to continue"
+                    ! read(unit=*,fmt=*)
+                end if
 
-                ! q = q + dq
-                ! u_local = q2u(q)
-                ! du_local = u_local - u(:,i)
-
-                ! !Check negative desnity/pressure and compute a safety factor if needed.
-                ! omegan = safety_factor( u(:,i), du_local )
-
-                ! ! Update the conservative variables
-                ! u(:,i) = u(:,i) + omegan*matmul(var_ur_array,du_local)
-                ! ! u(:,i) = u(:,i) + matmul(var_ur_array,du_local)
-                ! ! u(:,i) = q2u(q)
-                !Update the primitive variables.
                 w(:,i) = q2w( q(:,i) )
             else
                 omegan = safety_factor( u(:,i), du(:,i) )
@@ -606,8 +597,17 @@ contains
             end do
     
         endif
+
+        if (abs(safety_factor_primative * dq(1))/q(1)  > 0.2_p2  ) then 
+            safety_factor_primative = safety_factor_primative * 0.2_p2 * q(1) / dq(1)
+        endif   
+        
+        if (abs(safety_factor_primative * dq(5))/q(5)  > 0.2_p2  ) then 
+            safety_factor_primative = safety_factor_primative * 0.2_p2 * q(5) / dq(5)
+        endif   
+            
     
     
     end function safety_factor_primative
-       
+
 end module module_steady_solver

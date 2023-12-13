@@ -12,14 +12,16 @@ contains
                                                  interface_flux_viscous_prim
         use module_ccfv_data_grid       , only : nfaces, face, ncells, cell, face_nrml, face_nrml_mag, jac, &
                                                  kth_nghbr_of_1, kth_nghbr_of_2, bound
-        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw, uR2, gamma, wsn, q, u2q, res, q2u, mu, gradq
+        use module_ccfv_data_soln       , only : w, u, u2w, dtau, Temp, mu, gradw, uR2, gamma, wsn, q, u2q, res, q2u, mu, gradq, &
+                                                 gradq_w, gradw_w, res
         use module_bc_states            , only : get_right_state, get_viscous_right_state
         use module_gewp                 , only : gewp_solve
-        use module_input_parameter      , only : navier_stokes, low_mach_correction, visc_flux_method
+        use module_input_parameter      , only : navier_stokes, low_mach_correction, visc_flux_method, limit_update
+        use module_ccfv_residual        , only : solution_limiting
         
         implicit none
         ! Local Vars
-        integer                     :: c1, c2, i, k, ib, idestat, j, os
+        integer                     :: c1, c2, i, k, ib, idestat, j, os, ii,jj
         real(p2), dimension(3)      :: unit_face_nrml, bface_centroid, ds, d_Cb, ejk
         real(p2), dimension(5)      :: u1, u2, ub, wb, qb, q1
         real(p2), dimension(3,5)    :: gradw1, gradw2, gradwb
@@ -74,8 +76,8 @@ contains
                     u1      = u(:,c1)
                     u2      = u(:,c2)
 
-                    gradw1  = gradw(:,:,c1)
-                    gradw2  = gradw(:,:,c2)
+                    gradw1  = gradw_w(:,:,c1)
+                    gradw2  = gradw_w(:,:,c2)
 
                     ds      = (/cell(c2)%xc - cell(c1)%xc,cell(c2)%yc-cell(c1)%yc,cell(c2)%zc-cell(c1)%zc/)
                     mag_ds   = sqrt(ds(1)**2 + ds(2)**2 + ds(3)**2)
@@ -83,7 +85,7 @@ contains
 
                     call interface_viscous_alpha_jacobian(u1,u2,gradw1,gradw2,unit_face_nrml,ds,mag_ds,dFnduL,dFnduR)
                 elseif (visc_flux_method == 'corrected') then
-                    call interface_flux_viscous_prim(q(:,c1),q(:,c2),mu(c1),mu(c2),gradq(:,:,c1),gradq(:,:,c2),unit_face_nrml, &
+                    call interface_flux_viscous_prim(q(:,c1),q(:,c2),mu(c1),mu(c2),gradq_w(:,:,c1),gradq_w(:,:,c2),unit_face_nrml, &
                                                                                           cell(c1)%xc,cell(c1)%yc,cell(c1)%zc, & 
                                                                                           cell(c2)%xc,cell(c2)%yc,cell(c2)%zc, &
                                                                                           dFnduL,dFnduR)
@@ -140,7 +142,7 @@ contains
                     cycle
                 else
                     call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
-                    u1,gradw1,unit_face_nrml,bc_type(ib),ub,gradwb)
+                    u1,gradq_w(:,:,c1),unit_face_nrml,bc_type(ib),ub,gradwb)
 
                     if (visc_flux_method == 'alpha') then
                         d_Cb = (/bface_centroid(1) - cell(c1)%xc,bface_centroid(2) - cell(c1)%yc,bface_centroid(3) - cell(c1)%zc/)
@@ -183,7 +185,7 @@ contains
                 rho_p = gamma/q(5,i)
                 rho_T = - (q(1,i)*gamma)/(q(5,i)**2)
                 rho = q(1,i)*gamma/q(5,i)
-                theta = (1/uR2(i)) - rho_T*(gamma - one)/(rho)
+                theta = (1/q(5,i)**2) - rho_T*(gamma - one)/(rho)
                 
                 preconditioner(1,:) = (/ theta,        zero,       zero,       zero,       rho_T                    /)
                 preconditioner(2,:) = (/ theta*q(2,i), rho,        zero,       zero,       rho_T*q(2,i)             /)
@@ -198,6 +200,13 @@ contains
                 lambda = absu*(one-alpha) + sqrt((alpha**2) * (absu**2) + uR2(i))
                 dtau(i) = dtau(i) * two * wsn(i) / lambda
 
+                if (limit_update) call solution_limiting(res(:,i),q(:,i),gradq(:,1,i),cell(i)%vol,dtau(i))
+                
+                do ii = 1,5
+                    do jj = 1,5
+                        jac(i)%diag(ii,jj) = jac(i)%diag(ii,jj) + (cell(i)%vol/dtau(i))*preconditioner(ii,jj)
+                    end do
+                end do
             else
                 do k = 1,5
                     jac(i)%diag(k,k) = jac(i)%diag(k,k) + cell(i)%vol/dtau(i)

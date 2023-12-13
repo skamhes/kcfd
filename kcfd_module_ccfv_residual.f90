@@ -12,12 +12,13 @@ contains
         use module_ccfv_data_grid  , only : nfaces, face, ncells, cell, &
                     bound, face_nrml, face_nrml_mag, face_centroid
        
-        use module_ccfv_data_soln  , only : res, u, gradw, wsn, gradT, mu, w, gamma, u2w, Temp, uR2, gradq, q, u2q, q2u
+        use module_ccfv_data_soln  , only : res, u, gradw, wsn, gradT, mu, w, gamma, u2w, Temp, uR2, gradq, q, u2q, q2u, &
+                                            gradq_w, gradw_w
         use module_input_parameter , only : Pr, Freestream_Temp, visc_flux_method ! Prandtl number
         use module_flux            , only : interface_flux, compute_viscosity, compute_tau, viscous_flux, viscous_bflux, &
                                             viscous_alpha, viscous_flux_primitive
         use module_bc_states       , only : get_right_state, get_viscous_right_state
-        use module_ccfv_gradient   , only : compute_gradient, compute_temperature_gradient
+        use module_ccfv_gradient   , only : compute_gradient, compute_temperature_gradient, compute_weighted_gradient
         use module_input_parameter , only : accuracy_order, use_limiter, navier_stokes, low_mach_correction, min_ref_vel, &
                                             eps_weiss_smith, pressure_dif_ws
         use module_ccfv_limiter    , only : compute_limiter, phi
@@ -82,10 +83,12 @@ contains
         if (low_mach_correction) then
             cell_loop2_q : do i = 1, ncells
                 gradq(:,:,i) = zero
+                if (navier_stokes) gradq_w(:,:,i) = zero
             end do cell_loop2_q
         else
             cell_loop2_w : do i = 1, ncells
                 gradw(:,:,i) = zero
+                if (navier_stokes) gradw_w(:,:,i) = zero
             end do cell_loop2_w
         end if
         
@@ -106,7 +109,8 @@ contains
             end do
         end if
 
-        if (accuracy_order == 2 .or. navier_stokes) call compute_gradient
+        if (accuracy_order == 2) call compute_gradient
+        if (navier_stokes) call compute_weighted_gradient
         if (navier_stokes) then
             if (.not. low_mach_correction) call compute_temperature_gradient
             call compute_viscosity
@@ -205,13 +209,14 @@ contains
             ds = ds/magds
             if (visc_flux_method == 'corrected') then ! Corrected gradient
                 if (low_mach_correction) then
-                    call viscous_flux_primitive(q1,q2,gradq1,gradq2,mu(c1),mu(c2), &
+                    call viscous_flux_primitive(q1,q2,gradq_w(:,:,c1),gradq_w(:,:,c2),mu(c1),mu(c2), &
                                                      unit_face_normal, & !<- unit face normal
                                 cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
                                 cell(c2)%xc, cell(c2)%yc, cell(c2)%zc, & !<- Right cell centroid
                                                             visc_flux  )
                 else
-                    call viscous_flux(w(:,c1),w(:,c2), gradw1,gradw2, Temp(c1),Temp(c2), gradT(:,c1),gradT(:,c2), mu(c1),mu(c2), &
+                    call viscous_flux(w(:,c1),w(:,c2), gradw_w(:,:,c1),gradw_w(:,:,c2), Temp(c1),Temp(c2), gradT(:,c1),gradT(:,c2) &
+                                                          , mu(c1),mu(c2), &
                                                          unit_face_normal, & !<- unit face normal
                                     cell(c1)%xc, cell(c1)%yc, cell(c1)%zc, & !<- Left  cell centroid
                                     cell(c2)%xc, cell(c2)%yc, cell(c2)%zc, & !<- Right cell centroid
@@ -329,17 +334,17 @@ contains
                     cg_center = bface_centroid + d_Cb ! ghost cell center
                     if (low_mach_correction) then
                         call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
-                                                     u1,gradq1,unit_face_normal,bc_type(ib),ub,gradqb)
+                                                     u1,gradq_w(:,:,c1),unit_face_normal,bc_type(ib),ub,gradqb)
                         qb = u2q(ub)
                     else
                         call get_viscous_right_state(bface_centroid(1),bface_centroid(2),bface_centroid(3), &
-                                                     u1,gradw1,unit_face_normal,bc_type(ib),ub,gradwb)
+                                                     u1,gradw_w(:,:,c1),unit_face_normal,bc_type(ib),ub,gradwb)
                     end if
                     if (visc_flux_method == 'alpha') then
                         call viscous_alpha(u1,ub,gradw1,gradwb,bound(ib)%bface_nrml(:,j),ejk,mag_ejk,visc_flux)
                     elseif (visc_flux_method == 'corrected') then
                         if (low_mach_correction) then
-                            call viscous_flux_primitive(q1,qb,gradq1,gradqb,mu(c1),mu(c1), &
+                            call viscous_flux_primitive(q1,qb,gradq_w(:,:,c1),gradqb,mu(c1),mu(c1), &
                                                                          unit_face_normal, & !<- unit face normal
                                                   cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
                                                  cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
@@ -351,7 +356,7 @@ contains
                             a2 = gamma*half*(wb(5))/wb(1)
                             grad_Tb = ( gamma*gradwb(:,5) - a2*gradwb(:,1)) /wb(1)
 
-                            call viscous_flux(w1,wb, gradw1,gradwb, Temp(c1),Tb, gradT(:,c1),grad_Tb, mu(c1),mu(c1), &
+                            call viscous_flux(w1,wb, gradw_w(:,:,c1),gradwb, Temp(c1),Tb, gradT(:,c1),grad_Tb, mu(c1),mu(c1), &
                                                         unit_face_normal, & !<- unit face normal
                                 cell(c1)%xc,  cell(c1)%yc,  cell(c1)%zc, & !<- Left  cell centroid
                                 cg_center(1), cg_center(2), cg_center(3), & !<- Right cell centroid
@@ -364,7 +369,7 @@ contains
 
                     res(:,c1) = res(:,c1) + visc_flux * bound(ib)%bface_nrml_mag(j)
                     if (any(isnan(res(:,c1)))) then 
-                        write (*,*) "nan value present - press [Enter] to continue"
+                        write (*,*) "nan value present cell = ",c1," - press [Enter] to continue"
                         read(unit=*,fmt=*)
                     end if
                     if (low_mach_correction) then
@@ -381,4 +386,84 @@ contains
         end do boundary_loop
 
     end subroutine compute_residual
+
+    subroutine solution_limiting(res,q_ref,grad_pressure,vol,dtau)
+        
+        ! subroutine for limiting the CFL in areas where large change is expected to prevent divergence
+        ! https://doi.org/10.1016/j.jcp.2009.03.040
+
+        ! I would have put this in the steady solver module but circular dependencies and stuff...  Plus this uses the residual!
+
+        use module_common_data , only : p2, half, third
+        use module_input_parameter , only : CFL, M_inf
+        use module_ccfv_data_soln , only : gamma, p_inf
+
+        implicit none
+
+        real(p2), dimension(5), intent(in   ) :: res ! estimated solution update Q^{n+1} (equal to cell residual)
+        real(p2), dimension(5), intent(in   ) :: q_ref ! current solution Q^{n}
+        real(p2), dimension(3), intent(in   ) :: grad_pressure ! gradient of pressure in the cell
+        real(p2),               intent(in   ) :: vol ! cell volume (used for approximating pressure diff accross cell)
+        real(p2),               intent(inout) :: dtau ! (potentially) limited timestep
+
+        real(p2) :: p_ref, T_ref         ! reference values that will be used to see if we need to limit the solution
+        real(p2), dimension(3) :: u_ref  ! reference values that will be used to see if we need to limit the solution
+        real(p2) :: alpha = 0.1_p2       ! maximum allowable fractional change
+        real(p2) :: alpha_u = 2._p2      ! maximum allowable change for local velocity
+        real(p2) :: p_grad_mag           ! magnitude of the pressure gradient
+        real(p2) :: u_mag                ! magnitude of cell vellocity
+        real(p2) :: delta_p              ! measurement of variation in p across the cell
+        real(p2) :: min_limit = 1e-09_p2 ! minimum limit to prevent ref values going to zero
+        real(p2) :: rho                  ! local cell density (wer're using primitive variables after all)
+        real(p2) :: CFL_mod              ! limited CFL
+        real(p2), dimension(5 ):: q_est  ! estimated change in the solution after update (q_est = dTau * res)
+        integer :: i
+
+
+        ! First Calculate rho.  We'll need it.
+        rho = q_ref(1)*gamma/q_ref(5)
+
+        ! Approximate the variation in pressure across the cell.  This is done by taking the cell "length" and multiplying by the 
+        ! pressure gradient.  For 3D cells vol^1/3 is an ok approximation of the cell length.  For now we're gonna try multiplying 
+        ! by a half to be a little more conservative.
+        p_grad_mag = sqrt(grad_pressure(1)**2 + grad_pressure(2)**2 + grad_pressure(3)**2)
+        delta_p = half * p_grad_mag * vol ** (third)
+
+        ! Caluculate magnitude of cell velocity
+        u_mag = sqrt(q_ref(2)**2 + q_ref(3)**2 + q_ref(4)**2)
+
+        ! First calculate p_ref
+        p_ref = alpha * max(half*rho*u_mag**2 , delta_p , p_inf*min_limit)
+
+        ! Next the velocity ref for each direction
+        do i = 1,3
+            u_ref(i) = max(alpha_u*abs(q_ref(i+1) ), alpha * q_ref(5) * delta_p / (gamma * q_ref(1)) , M_inf * min_limit )
+        end do
+
+        ! The reference temperature is simple
+        T_ref = max(alpha * q_ref(5), min_limit)
+
+        ! Calculate q_est = dTau * res and check for alpha
+        q_est = dtau * res
+
+        ! First set the initial CFL
+        CFL_mod = CFL
+
+        ! Check pressure update
+        CFL_mod = min( CFL_mod,CFL * p_ref / abs(q_est(1)) )
+
+        ! repeat for velocity
+        do i = 1,3
+            CFL_mod = min( CFL_mod, CFL * u_ref(i) / abs(q_est(i+1)) )
+        end do
+
+        ! Repeat for temperature
+        CFL_mod = min(CFL_mod, CFL * T_ref / abs(q_est(5)) )
+
+        ! if the CFL has been limited apply the limiting to dtau
+        if (CFL_mod < CFL) then
+            dtau = dtau * (CFL_mod / CFL)
+        end if
+
+    end subroutine solution_limiting
 end module module_ccfv_residual

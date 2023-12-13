@@ -71,6 +71,9 @@ module module_input_parameter
     real(p2) :: pressure_dif_ws = 5.0_p2
     character(80) :: entropy_fix = "harten"
 
+    ! Solution update limiting
+    logical :: limit_update ! Closed loop method for limiting CFL in cells with large estimated change to prevent divergence
+
   ! End of Default input values
   !-------------------------------------------------------------------------
   
@@ -120,7 +123,8 @@ module module_input_parameter
     min_ref_vel          , &
     eps_weiss_smith      , &
     pressure_dif_ws      , &
-    entropy_fix
+    entropy_fix          , &
+    limit_update
 
     contains    
         subroutine read_nml_input_parameters(namelist_file)

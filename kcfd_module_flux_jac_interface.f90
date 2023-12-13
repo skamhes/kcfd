@@ -27,7 +27,7 @@ contains
 
         ! Local vavrs
         real(p2), dimension(5)      :: wL, wR, uL, uR
-        real(p2), dimension(5,5)    :: dfndu
+        real(p2), dimension(5,5)    :: dfndu, dfndu_temp
         real(p2), dimension(5)      :: dummy5
         real(p2)                    :: wsn
         
@@ -56,22 +56,22 @@ contains
                     uL_ddt = q2u_ddt(qL_ddt)
                     uR_ddt = q2u_ddt(qR_ddt)
                 end if
-                dp =   ddt_abs(qR_ddt(1) - qL_ddt(1))  !Pressure difference
-                ! ddt_max doesn't like variable numbers of inputs... no problem...
-                ! uR2L_ddt = ddt_max(ddt_sqrt( qL_ddt(2)**2 + qL_ddt(3)**2 + qL_ddt(4)**2) , &
-                !                     ddt_max( pressure_dif_ws*ddt_sqrt(dp/uL_ddt(1))      , &
-                !                     ddt_max( eps_weiss_smith*qL_ddt(5),min_ref_vel) ) )
-                ! uR2R_ddt = ddt_max(ddt_sqrt(qR_ddt(2)**2 + qR_ddt(3)**2 + qR_ddt(4)**2) , &
-                !                     ddt_max( pressure_dif_ws*ddt_sqrt(dp/uR_ddt(1))     , &
-                !                     ddt_max(eps_weiss_smith*qR_ddt(5), min_ref_vel) ) )
+                ! dp =   ddt_abs(qR_ddt(1) - qL_ddt(1))  !Pressure difference
+                ! ! ddt_max doesn't like variable numbers of inputs... no problem...
+                ! ! uR2L_ddt = ddt_max(ddt_sqrt( qL_ddt(2)**2 + qL_ddt(3)**2 + qL_ddt(4)**2) , &
+                ! !                     ddt_max( pressure_dif_ws*ddt_sqrt(dp/uL_ddt(1))      , &
+                ! !                     ddt_max( eps_weiss_smith*qL_ddt(5),min_ref_vel) ) )
+                ! ! uR2R_ddt = ddt_max(ddt_sqrt(qR_ddt(2)**2 + qR_ddt(3)**2 + qR_ddt(4)**2) , &
+                ! !                     ddt_max( pressure_dif_ws*ddt_sqrt(dp/uR_ddt(1))     , &
+                ! !                     ddt_max(eps_weiss_smith*qR_ddt(5), min_ref_vel) ) )
+                ! if (navier_stokes) then
+                !     ! uR2R_rec = max(uR2R_rec,)
+                !     ! write(*,*) "low mach diffusive time scale not implemented"
+                ! end if
+                ! uR2L_ddt = ddt_min(uR2L_ddt,qL_ddt(5))**2 ! cap with the speed of sound
+                ! uR2R_ddt = ddt_min(uR2R_ddt,qR_ddt(5))**2
                 uR2L_ddt = uR2L
                 uR2R_ddt = uR2R
-                if (navier_stokes) then
-                    ! uR2R_rec = max(uR2R_rec,)
-                    ! write(*,*) "low mach diffusive time scale not implemented"
-                end if
-                uR2L_ddt = ddt_min(uR2L_ddt,qL_ddt(5))**2 ! cap with the speed of sound
-                uR2R_ddt = ddt_min(uR2R_ddt,qR_ddt(5))**2
             else
                 ! No reconstruction
                 wL = wj
@@ -109,8 +109,10 @@ contains
             !  (1) Roe flux
             !------------------------------------------------------------
             if(trim(inviscid_jac)=="roe") then
+                
                 if (low_mach_correction) then
-                    call roe_low_mach_ddt(uL_ddt,uR_ddt,uR2L,uR2R,njk,dummy5,dfndu,wsn)
+                    ! call roe_low_mach_ddt(uL_ddt,uR_ddt,uR2L,uR2R,njk,dummy5,dfndu,wsn)
+                    call roe_ddt(uL_ddt,uR_ddt,njk, dummy5,dfndu,wsn)
                 else
                     call roe_ddt(uL_ddt,uR_ddt,njk, dummy5,dfndu,wsn)
                 end if

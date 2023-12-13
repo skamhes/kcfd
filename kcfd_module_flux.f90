@@ -88,6 +88,7 @@ module module_flux
         if(trim(inviscid_flux)=="roe") then
             if (low_mach_correction) then
                     call roe_low_mach(uL,uR,uR2L_rec,uR2R_rec,n12,num_flux,wsn)
+                    call roe(uL,uR,n12, num_flux,wsn)
             else
                 call roe(uL,uR,n12, num_flux,wsn)
             end if
@@ -980,6 +981,7 @@ module module_flux
         diss(:) = ws(1)*LdU(1)*R(:,1) + ws(2)*LdU(2)*R(:,2) &
                 + ws(3)*LdU(3)*R(:,3) + ws(4)*LdU(4)*R(:,4)
        
+        write(*,*) "ROE Diss: ", diss
         ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
         ! write(*,*) "Normal:", diss
         num_flux = half * (fL + fR - diss)
@@ -995,7 +997,7 @@ module module_flux
 
             use module_common_data, only : p2, one, two, half, zero
             use module_ccfv_data_soln , only : gamma
-            use module_input_parameter, only : eig_limiting_factor, solver_type, entropy_fix
+            use module_input_parameter, only : eig_limiting_factor, solver_type, entropy_fix, pressure_dif_ws, min_ref_vel
 
             implicit none
 
@@ -1030,6 +1032,7 @@ module module_flux
             real(p2) :: absU, ws2, ws3         ! accoustic wave speeds |u'+c'| and |u'-c'|
             real(p2) :: uprime, cprime, alpha, beta, uR2
             real(p2) :: cstar, Mstar, delu, delp
+            real(p2) :: T, rho_p, rho_T
             real(p2), dimension(4) :: LdU      ! Wave strengths = L*(UR-UL)
             real(p2) :: du, dv, dw             ! Velocity differences
             real(p2), dimension(4)   :: ws     ! Wave speeds
@@ -1087,27 +1090,28 @@ module module_flux
            
             !First compute the arithmetic-averaged quantities
             
-              rho = half * (rhoR + rhoL)                           !Arithemtic-averaged density
-                u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
-                v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
-                w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
-                H = half * (HL   + HR  )                           !Arithemtic-averaged total enthalpy
-                p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
-                a = sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
-               qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
-              uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
+            !   rho = half * (rhoR + rhoL)                           !Arithemtic-averaged density
+            !     u = half * (uL   + uR  )                           !Arithemtic-averaged x-velocity
+            !     v = half * (vL   + vR  )                           !Arithemtic-averaged y-velocity
+            !     w = half * (wL   + wR  )                           !Arithemtic-averaged z-velocity
+            !     H = half * (HL   + HR  )                           !Arithemtic-averaged total enthalpy
+            !     p = half * (pL   + pR  )                           !Arithmetic-averaged pressure
+            !     a = sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Arithemtic-averaged speed of sound
+            !    qn = u*nx + v*ny + w*nz                             !Arithemtic-averaged face-normal velocity
+            !   uR2 = half * (uR2L + uR2R)                           !Arithmetic-averaged scaling term
 
 
             ! Roe averages
-            ! RT = sqrt(rhoR/rhoL)
-            ! rho = RT*rhoL                                        !Roe-averaged density
-            ! u = (uL + RT*uR)/(one + RT)                        !Roe-averaged x-velocity
-            ! v = (vL + RT*vR)/(one + RT)                        !Roe-averaged y-velocity
-            ! w = (wL + RT*wR)/(one + RT)                        !Roe-averaged z-velocity
-            ! H = (HL + RT*HR)/(one + RT)                        !Roe-averaged total enthalpy
-            ! a = sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Roe-averaged speed of sound
-            ! qn = u*nx + v*ny + w*nz                             !Roe-averaged face-normal velocity
-            ! uR2 = a**2
+            RT = sqrt(rhoR/rhoL)
+            rho = RT*rhoL                                        !Roe-averaged density
+            u = (uL + RT*uR)/(one + RT)                        !Roe-averaged x-velocity
+            v = (vL + RT*vR)/(one + RT)                        !Roe-averaged y-velocity
+            w = (wL + RT*wR)/(one + RT)                        !Roe-averaged z-velocity
+            H = (HL + RT*HR)/(one + RT)                        !Roe-averaged total enthalpy
+            p = (pL + RT*pR)/(one + RT)                        !Roe-averaged pressure
+            a = sqrt( (gamma-one)*(H-half*(u*u + v*v + w*w)) ) !Roe-averaged speed of sound
+            qn = u*nx + v*ny + w*nz                             !Roe-averaged face-normal velocity
+            uR2 = (uR2L + RT*uR2R)/(one + RT)                  !Roe-averaged uR2
 
             !Wave Strengths
            
@@ -1115,18 +1119,20 @@ module module_flux
                 dp =   pR - pL   !Pressure difference
                dqn =  qnR - qnL  !Normal velocity difference (= delta_u in Weiss and Smith)
 
+            !    uR2 = min(a, max(abs(qn), pressure_dif_ws*sqrt(abs(dp)/rho), min_ref_vel ) )
+
                drhou = ucR(2) - ucL(2)
                drhov = ucR(3) - ucL(3)
                drhow = ucR(4) - ucL(4)
                drhoE = ucR(5) - ucL(5)
                absU  = abs(qn) ! wave speed one
-            !    ! Entropy fix? I guess not....... Need to investigate more
-            !     if (absU < 0.1_p2 * a) then
-            !         ! if ( ws(i) < dws(i) ) ws(i) = half * ( ws(i)*ws(i)/dws(i)+dws(i) )
-            !         absU  = half * ( (absU**2)/(0.2_p2*a) + (0.2_p2*a) ) 
-            !     end if
 
-                beta = rho/(gamma*p)
+                ! beta = rho/(gamma*p)
+                ! beta = one/(a**2)
+                T = gamma * P / rho
+                rho_p = gamma/T
+                rho_T = - (p * gamma) / ( T**2 )
+                beta = rho_p + rho_T * (gamma - 1) / (rho)
                alpha = half * (one-beta*uR2)
             !    alpha = zero
               cprime = sqrt((alpha**2) * (qn**2) + uR2)
@@ -1161,15 +1167,15 @@ module module_flux
             diss_cartesian(:,3) = (absU * drhov + delu * rho * v) * njk
             diss_cartesian(:,4) = (absU * drhow + delu * rho * w) * njk
             diss_cartesian(:,5) = (absU * drhoE + delu * rho * H) * njk
-
+            
+            diss_cartesian(1,2) = diss_cartesian(1,2) + delp
+            diss_cartesian(2,3) = diss_cartesian(2,3) + delp
+            diss_cartesian(3,4) = diss_cartesian(3,4) + delp
+            diss_cartesian(:,5) = diss_cartesian(:,5) + delp * (/ u , v , w /)
+            
             diss = matmul(transpose(diss_cartesian),njk)  ! compute the component normal to the face to get the actual flux
 
-            ! now add the final term
-            ! diss(1) += 0
-            diss(2) = diss(2) + delp * nx
-            diss(3) = diss(3) + delp * ny
-            diss(4) = diss(4) + delp * nz
-            diss(5) = diss(5) + delp * qn
+            write(*,*) "LM ROE Diss: ", diss
 
             ! This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - GAMMA|An|(WR-WL) ]
             ! write(*,*) "Low-Ma:", diss
@@ -1178,5 +1184,50 @@ module module_flux
             ! Max wave speed normal to the face:
             ! wsn = max(abs(uprime) + cprime,abs(qn)+a)
             wsn = abs(uprime) + cprime
-            end subroutine roe_low_mach
+        end subroutine roe_low_mach
+
+        subroutine van_leer(qcL, qcR, njk, num_flux,wsn)
+            use module_common_data , only : p2, one, two, half, fourth
+            use module_ccfv_data_soln,only: gamma
+
+            implicit none
+
+            real(p2), dimension(5), intent(in) :: qcL, qcR ! left and right primitive states (p,u,v,w,T)
+            real(p2), dimension(3), intent(in) :: njk      ! face normal
+            
+            real(p2), dimension(5), intent(out):: num_flux ! numerical flux
+            real(p2),               intent(out):: wsn      ! wave speed number
+
+            real(p2)                :: ubarL, ubarR ! normal velocity
+            real(p2)                :: MbarL, MbarR ! normal mach number
+            real(p2)                :: rhoL,  rhoR  ! left and right density
+            real(p2), dimension(5)  :: fplus, fminus! left and right flux
+            real(p2)                :: aL,    aR    ! left and right speed of sound
+            real(p2)                :: EL,    ER    ! left and right energy
+            real(p2)                :: gammam1      ! gamma - 1
+
+            gammam1 = gamma - one
+
+            ! calculate left values
+            aL = qcL(5)
+            rhoL = qcL(1)*gamma/qcL(5)
+            EL = qcL(1)/(rhoL*gammam1) + half * (qcL(2)**2 + qcL(3)**2 + qcL(4)**2)
+            ubarL = qcL(2)*njk(1) + qcL(3)*njk(2) + qcL(4)*njk(3)
+            MbarL = ubarL/aL
+
+            if (abs(MbarL) < one) then
+                fplus(1) = fourth * rhoL * aL * (MbarL + 1)**2
+                ! fplus(2) = 
+                ! fplus(3) = 
+                ! fplus(4) = 
+                ! fplus(5) = 
+            else
+
+            endif
+
+
+
+
+
+        end subroutine van_leer
 end module module_flux
